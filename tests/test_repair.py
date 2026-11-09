@@ -212,7 +212,7 @@ def test_defined_reference_links_and_undefined_uses_are_kept() -> None:
 
 TASK = {
     "id": 7,
-    "type": "marp_slides:slide_deck_generation",
+    "type": "slideprepper:slide_deck_generation",
     "status": "STATUS_RUNNING",
     "userId": "alice",
     "appId": "context_agent",

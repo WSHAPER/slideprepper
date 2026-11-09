@@ -82,10 +82,10 @@ The ExApp **never calls a model API directly**: it schedules nested `core:text2t
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `MARP_SLIDES_LLM_TIMEOUT` | 300 s | one nested text2text round |
-| `MARP_SLIDES_TOTAL_LLM_TIMEOUT` | 1800 s | all inner rounds of one deck |
-| `MARP_SLIDES_MAX_SLIDES` | 60 | hard slide cap (task input clamped 1..60) |
-| `MARP_SLIDES_RETRY_LLM` | true | self-correcting inner retry |
+| `SLIDEPREPPER_LLM_TIMEOUT` | 300 s | one nested text2text round |
+| `SLIDEPREPPER_TOTAL_LLM_TIMEOUT` | 1800 s | all inner rounds of one deck |
+| `SLIDEPREPPER_MAX_SLIDES` | 60 | hard slide cap (task input clamped 1..60) |
+| `SLIDEPREPPER_RETRY_LLM` | true | self-correcting inner retry |
 
 For the nightly tier, point `EVAL_LLM_BASE_URL`/`EVAL_LLM_MODEL` at a server running the same model class your Nextcloud instance uses (the pipeline's numbers are calibrated on a local qwen; any OpenAI-compatible server — vLLM, ollama, llama.cpp — works).
 

@@ -31,25 +31,25 @@ from marp_slides.task_worker import AdminConfigCache
 #: An env override per knob: proves the ADMIN value wins over env, and the
 #: env value over the built-in default (each distinct from both).
 _ENV_LEVEL = {
-    "MARP_SLIDES_TOTAL_LLM_TIMEOUT": "600",
-    "MARP_SLIDES_MAX_SLIDES": "10",
-    "MARP_SLIDES_MAX_PROMPT_CHARS": "100",
-    "MARP_SLIDES_DRAFTS_FOLDER": "Env Drafts",
-    "MARP_SLIDES_RETRY_LLM": "false",
-    "MARP_SLIDES_OVERFLOW_CHECK": "false",
-    "MARP_SLIDES_LOG_EXCERPT": "false",
-    "MARP_SLIDES_DRAFTS_ENABLED": "false",
+    "SLIDEPREPPER_TOTAL_LLM_TIMEOUT": "600",
+    "SLIDEPREPPER_MAX_SLIDES": "10",
+    "SLIDEPREPPER_MAX_PROMPT_CHARS": "100",
+    "SLIDEPREPPER_DRAFTS_FOLDER": "Env Drafts",
+    "SLIDEPREPPER_RETRY_LLM": "false",
+    "SLIDEPREPPER_OVERFLOW_CHECK": "false",
+    "SLIDEPREPPER_LOG_EXCERPT": "false",
+    "SLIDEPREPPER_DRAFTS_ENABLED": "false",
 }
 
 _ADMIN_LEVEL = {
-    "MARP_SLIDES_TOTAL_LLM_TIMEOUT": "1200",
-    "MARP_SLIDES_MAX_SLIDES": "20",
-    "MARP_SLIDES_MAX_PROMPT_CHARS": "200",
-    "MARP_SLIDES_DRAFTS_FOLDER": "Admin Drafts",
-    "MARP_SLIDES_RETRY_LLM": "true",
-    "MARP_SLIDES_OVERFLOW_CHECK": "true",
-    "MARP_SLIDES_LOG_EXCERPT": "true",
-    "MARP_SLIDES_DRAFTS_ENABLED": "true",
+    "SLIDEPREPPER_TOTAL_LLM_TIMEOUT": "1200",
+    "SLIDEPREPPER_MAX_SLIDES": "20",
+    "SLIDEPREPPER_MAX_PROMPT_CHARS": "200",
+    "SLIDEPREPPER_DRAFTS_FOLDER": "Admin Drafts",
+    "SLIDEPREPPER_RETRY_LLM": "true",
+    "SLIDEPREPPER_OVERFLOW_CHECK": "true",
+    "SLIDEPREPPER_LOG_EXCERPT": "true",
+    "SLIDEPREPPER_DRAFTS_ENABLED": "true",
 }
 
 #: The expected effective value per knob per precedence level (attribute
@@ -95,48 +95,48 @@ def test_admin_value_of_every_knob_wins_in_one_batch() -> None:
 
 
 def test_unset_or_empty_admin_key_keeps_env_value() -> None:
-    base = Settings.from_env({"MARP_SLIDES_MAX_SLIDES": "10"})
+    base = Settings.from_env({"SLIDEPREPPER_MAX_SLIDES": "10"})
     assert apply_admin_config(base, {}).max_slides == 10
-    assert apply_admin_config(base, {"MARP_SLIDES_MAX_SLIDES": ""}).max_slides == 10
+    assert apply_admin_config(base, {"SLIDEPREPPER_MAX_SLIDES": ""}).max_slides == 10
     # a whitespace-only string knob is unset, like the env parser treats it
     assert (
         apply_admin_config(
-            Settings.from_env({"MARP_SLIDES_DRAFTS_FOLDER": "Env Drafts"}),
-            {"MARP_SLIDES_DRAFTS_FOLDER": "   "},
+            Settings.from_env({"SLIDEPREPPER_DRAFTS_FOLDER": "Env Drafts"}),
+            {"SLIDEPREPPER_DRAFTS_FOLDER": "   "},
         ).drafts_folder
         == "Env Drafts"
     )
 
 
 def test_invalid_int_fails_soft_to_env_with_warning(caplog) -> None:
-    base = Settings.from_env({"MARP_SLIDES_MAX_SLIDES": "10"})
+    base = Settings.from_env({"SLIDEPREPPER_MAX_SLIDES": "10"})
     with caplog.at_level(logging.WARNING, logger="marp_slides.settings"):
-        layered = apply_admin_config(base, {"MARP_SLIDES_MAX_SLIDES": "many"})
+        layered = apply_admin_config(base, {"SLIDEPREPPER_MAX_SLIDES": "many"})
     assert layered.max_slides == 10
-    assert "MARP_SLIDES_MAX_SLIDES" in caplog.text
+    assert "SLIDEPREPPER_MAX_SLIDES" in caplog.text
     assert "many" in caplog.text
 
 
 def test_invalid_bool_fails_soft_to_env_with_warning(caplog) -> None:
     """A bool typo must not silently disable a feature (the env parser
     accepts any string; the admin source is stricter by design)."""
-    base = Settings.from_env({"MARP_SLIDES_RETRY_LLM": "true"})
+    base = Settings.from_env({"SLIDEPREPPER_RETRY_LLM": "true"})
     with caplog.at_level(logging.WARNING, logger="marp_slides.settings"):
-        layered = apply_admin_config(base, {"MARP_SLIDES_RETRY_LLM": "ture"})
+        layered = apply_admin_config(base, {"SLIDEPREPPER_RETRY_LLM": "ture"})
     assert layered.retry_llm is True
-    assert "MARP_SLIDES_RETRY_LLM" in caplog.text
+    assert "SLIDEPREPPER_RETRY_LLM" in caplog.text
     assert "ture" in caplog.text
 
 
 @pytest.mark.parametrize("token", ["1", "true", "yes", "on"])
 def test_admin_bool_truthy_tokens(token: str) -> None:
-    assert apply_admin_config(Settings(), {"MARP_SLIDES_DRAFTS_ENABLED": token})
+    assert apply_admin_config(Settings(), {"SLIDEPREPPER_DRAFTS_ENABLED": token})
 
 
 @pytest.mark.parametrize("token", ["0", "false", "no", "off", "FALSE", " Off "])
 def test_admin_bool_falsy_tokens(token: str) -> None:
     assert not apply_admin_config(
-        Settings(), {"MARP_SLIDES_DRAFTS_ENABLED": token}
+        Settings(), {"SLIDEPREPPER_DRAFTS_ENABLED": token}
     ).drafts_enabled
 
 
@@ -145,14 +145,14 @@ def test_surfaced_keys_are_exactly_the_operational_knob_set() -> None:
     more. A knob joining or leaving the surface must be a deliberate
     change to this list."""
     assert ADMIN_CONFIG_KEYS == (
-        "MARP_SLIDES_TOTAL_LLM_TIMEOUT",
-        "MARP_SLIDES_MAX_SLIDES",
-        "MARP_SLIDES_MAX_PROMPT_CHARS",
-        "MARP_SLIDES_DRAFTS_FOLDER",
-        "MARP_SLIDES_RETRY_LLM",
-        "MARP_SLIDES_OVERFLOW_CHECK",
-        "MARP_SLIDES_LOG_EXCERPT",
-        "MARP_SLIDES_DRAFTS_ENABLED",
+        "SLIDEPREPPER_TOTAL_LLM_TIMEOUT",
+        "SLIDEPREPPER_MAX_SLIDES",
+        "SLIDEPREPPER_MAX_PROMPT_CHARS",
+        "SLIDEPREPPER_DRAFTS_FOLDER",
+        "SLIDEPREPPER_RETRY_LLM",
+        "SLIDEPREPPER_OVERFLOW_CHECK",
+        "SLIDEPREPPER_LOG_EXCERPT",
+        "SLIDEPREPPER_DRAFTS_ENABLED",
     )
 
 
@@ -163,11 +163,11 @@ def test_env_only_variables_are_not_surfaced() -> None:
     for secret in (
         "APP_SECRET",
         "NEXTCLOUD_URL",
-        "MARP_SLIDES_MARP_BIN",
-        "MARP_SLIDES_POLL_INTERVAL",
-        "MARP_SLIDES_LLM_TIMEOUT",
-        "MARP_SLIDES_MARP_TIMEOUT",
-        "MARP_SLIDES_MAX_DECK_BYTES",
+        "SLIDEPREPPER_MARP_BIN",
+        "SLIDEPREPPER_POLL_INTERVAL",
+        "SLIDEPREPPER_LLM_TIMEOUT",
+        "SLIDEPREPPER_MARP_TIMEOUT",
+        "SLIDEPREPPER_MAX_DECK_BYTES",
     ):
         assert secret in ENV_ONLY_CONFIG_KEYS
         assert secret not in ADMIN_CONFIG_KEYS
@@ -190,7 +190,7 @@ def test_knob_spec_is_well_formed() -> None:
     attributes = {knob.attribute for knob in ADMIN_CONFIG_KNOBS}
     keys = [knob.key for knob in ADMIN_CONFIG_KNOBS]
     assert len(keys) == len(set(keys))  # keys are the appconfig keys: unique
-    assert all(knob.key.startswith("MARP_SLIDES_") for knob in ADMIN_CONFIG_KNOBS)
+    assert all(knob.key.startswith("SLIDEPREPPER_") for knob in ADMIN_CONFIG_KNOBS)
     assert all(knob.kind in ("int", "bool", "str") for knob in ADMIN_CONFIG_KNOBS)
     # every attribute exists on Settings and carries a metadata-bearing
     # label/description for the admin form
@@ -205,11 +205,11 @@ def test_layering_preserves_env_only_settings() -> None:
     """Applying admin values must never touch the env-only knobs."""
     base = Settings.from_env(
         {
-            "MARP_SLIDES_POLL_INTERVAL": "2.5",
-            "MARP_SLIDES_MARP_TIMEOUT": "60",
-            "MARP_SLIDES_LLM_TIMEOUT": "120",
-            "MARP_SLIDES_MAX_DECK_BYTES": "2048",
-            "MARP_SLIDES_MARP_BIN": "/usr/local/bin/marp",
+            "SLIDEPREPPER_POLL_INTERVAL": "2.5",
+            "SLIDEPREPPER_MARP_TIMEOUT": "60",
+            "SLIDEPREPPER_LLM_TIMEOUT": "120",
+            "SLIDEPREPPER_MAX_DECK_BYTES": "2048",
+            "SLIDEPREPPER_MARP_BIN": "/usr/local/bin/marp",
         }
     )
     layered = apply_admin_config(base, _ADMIN_LEVEL)
@@ -255,16 +255,16 @@ def test_cache_reads_through_and_observes_change_after_ttl() -> None:
     """Refresh semantics: one batched read serves the TTL window; a value
     an admin saves is observed by a later task once the TTL expires (the
     documented worst-case latency for a knob change)."""
-    appconfig = _FakeAppConfigExAPI({"MARP_SLIDES_MAX_SLIDES": "2"})
+    appconfig = _FakeAppConfigExAPI({"SLIDEPREPPER_MAX_SLIDES": "2"})
     clock = _FakeClock()
     cache = AdminConfigCache(
-        Settings.from_env({"MARP_SLIDES_MAX_SLIDES": "10"}),
+        Settings.from_env({"SLIDEPREPPER_MAX_SLIDES": "10"}),
         ttl_s=ADMIN_CONFIG_REFRESH_TTL_S,
         clock=clock,
     )
     nc = SimpleNamespace(appconfig_ex=appconfig)
     assert cache.settings_for(nc).max_slides == 2  # admin beats env
-    appconfig.values["MARP_SLIDES_MAX_SLIDES"] = "3"
+    appconfig.values["SLIDEPREPPER_MAX_SLIDES"] = "3"
     clock.now = 10.0
     assert cache.settings_for(nc).max_slides == 2  # still fresh: no read
     assert len(appconfig.reads) == 1
@@ -282,7 +282,7 @@ def test_cache_batches_every_knob_key_in_one_read() -> None:
 
 
 def test_cache_without_values_returns_env_settings() -> None:
-    base = Settings.from_env({"MARP_SLIDES_TOTAL_LLM_TIMEOUT": "600"})
+    base = Settings.from_env({"SLIDEPREPPER_TOTAL_LLM_TIMEOUT": "600"})
     cache = AdminConfigCache(base, clock=_FakeClock())
     assert cache.settings_for(SimpleNamespace(appconfig_ex=_FakeAppConfigExAPI())) == (
         base
@@ -298,7 +298,7 @@ def test_cache_read_failure_negative_caches_and_keeps_env(caplog) -> None:
     appconfig = _FakeAppConfigExAPI()
     appconfig.error = NextcloudException(997, "AppAPI unreachable")
     clock = _FakeClock()
-    base = Settings.from_env({"MARP_SLIDES_MAX_SLIDES": "10"})
+    base = Settings.from_env({"SLIDEPREPPER_MAX_SLIDES": "10"})
     cache = AdminConfigCache(base, ttl_s=30.0, clock=clock)
     nc = SimpleNamespace(appconfig_ex=appconfig)
     with caplog.at_level(logging.WARNING, logger="marp_slides.task_worker"):
@@ -313,7 +313,7 @@ def test_cache_read_failure_negative_caches_and_keeps_env(caplog) -> None:
 def test_cache_recovers_after_a_failed_read() -> None:
     from nc_py_api import NextcloudException
 
-    appconfig = _FakeAppConfigExAPI({"MARP_SLIDES_MAX_SLIDES": "2"})
+    appconfig = _FakeAppConfigExAPI({"SLIDEPREPPER_MAX_SLIDES": "2"})
     error = NextcloudException(997, "AppAPI unreachable")
     appconfig.error = error
     clock = _FakeClock()
@@ -335,10 +335,10 @@ def test_admin_form_covers_exactly_the_knob_set() -> None:
     from marp_slides.controller import admin_settings_form
 
     form = admin_settings_form()
-    assert form.id == "marp_slides_settings"
+    assert form.id == "slideprepper_settings"
     assert form.section_type == "admin"
     assert form.section_id == "declarative_settings"
-    assert form.title == "Marp Slides"
+    assert form.title == "SlidePrepper"
     assert f"within {ADMIN_CONFIG_REFRESH_TTL_S:.0f} seconds" in form.description
     assert "environment variable of the same name" in form.description
     assert [f.id for f in form.fields] == list(ADMIN_CONFIG_KEYS)
@@ -405,8 +405,8 @@ def test_enabled_handler_registers_providers_and_the_admin_form() -> None:
         assert settings_ui.forms[0].id == ADMIN_SETTINGS_FORM_ID
         assert enabled_handler(False, nc) == ""
         assert task_processing.unregistered == [
-            "marp_slides-deck_renderer",
-            "marp-slides:re_renderer",
+            "slideprepper-deck_renderer",
+            "slideprepper:re_renderer",
         ]
         assert len(settings_ui.forms) == 1  # the form is not unregistered
     finally:
@@ -442,17 +442,17 @@ def test_info_xml_documents_the_knob_set_and_its_labels() -> None:
         assert "ExApps Settings" in description, key
     # the env-only MARP knobs stay documented as non-admin-manageable
     for env_only in (
-        "MARP_SLIDES_POLL_INTERVAL",
-        "MARP_SLIDES_MARP_TIMEOUT",
-        "MARP_SLIDES_LLM_TIMEOUT",
+        "SLIDEPREPPER_POLL_INTERVAL",
+        "SLIDEPREPPER_MARP_TIMEOUT",
+        "SLIDEPREPPER_LLM_TIMEOUT",
     ):
         assert env_only in declared
         assert "not admin-manageable" in declared[env_only][1].lower(), env_only
-    # no undeclared strays: every declared MARP_SLIDES_ variable is
+    # no undeclared strays: every declared SLIDEPREPPER_ variable is
     # classified exactly once (surfaced or documented env-only)
-    declared_marp = {name for name in declared if name.startswith("MARP_SLIDES_")}
+    declared_marp = {name for name in declared if name.startswith("SLIDEPREPPER_")}
     assert declared_marp == set(ADMIN_CONFIG_KEYS) | {
-        "MARP_SLIDES_POLL_INTERVAL",
-        "MARP_SLIDES_MARP_TIMEOUT",
-        "MARP_SLIDES_LLM_TIMEOUT",
+        "SLIDEPREPPER_POLL_INTERVAL",
+        "SLIDEPREPPER_MARP_TIMEOUT",
+        "SLIDEPREPPER_LLM_TIMEOUT",
     }

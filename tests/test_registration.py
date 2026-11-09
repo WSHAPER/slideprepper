@@ -20,7 +20,7 @@ from marp_slides.settings import (
 
 def test_task_type_shape() -> None:
     tt = task_definition.TASK_TYPE
-    assert tt.id == TASK_TYPE_ID == "marp_slides:slide_deck_generation"
+    assert tt.id == TASK_TYPE_ID == "slideprepper:slide_deck_generation"
     assert [s.name for s in tt.input_shape] == ["input"]
     assert tt.input_shape[0].shape_type == ShapeType.TEXT
     assert tt.input_shape[0].description == (
@@ -37,7 +37,7 @@ def test_task_type_shape() -> None:
 
 def test_provider_shape() -> None:
     provider = task_definition.PROVIDER
-    assert provider.id == PROVIDER_ID == "marp_slides-deck_renderer"
+    assert provider.id == PROVIDER_ID == "slideprepper-deck_renderer"
     assert provider.task_type == TASK_TYPE_ID
     assert provider.expected_runtime == 120
     assert [s.name for s in provider.optional_input_shape] == [

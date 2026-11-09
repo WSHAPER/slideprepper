@@ -1,4 +1,4 @@
-# marp_slides ExApp image: pinned marpteam/marp-cli base (kept per contract;
+# slideprepper ExApp image: pinned marpteam/marp-cli base (kept per contract;
 # its bundled Chromium renders the pdf output format, the one output path
 # that uses the browser, while the PPTX is built natively with python-pptx
 # and marp-cli's HTML gate/render are Node-only) plus a Python FastAPI
@@ -27,7 +27,7 @@ RUN python3 -m venv /opt/venv \
 ENV PATH=/opt/venv/bin:$PATH
 
 # Expose marp-cli as a plain `marp` command for the worker and for ad-hoc use
-# (`docker run --rm marp-slides:dev marp --version`).
+# (`docker run --rm slideprepper:dev marp --version`).
 RUN printf '#!/bin/sh\nexec node /home/marp/.cli/marp-cli.js "$@"\n' > /usr/local/bin/marp \
     && chmod +x /usr/local/bin/marp
 
@@ -39,7 +39,7 @@ COPY main.py .
 # ownership so a first-use named volume inherits it (docker copies the
 # image dir's ownership into a fresh volume mounted here). The draft
 # checkpoint store writes under this directory.
-RUN mkdir -p /nc_app_marp_slides_data && chown marp:marp /nc_app_marp_slides_data
+RUN mkdir -p /nc_app_slideprepper_data && chown marp:marp /nc_app_slideprepper_data
 
 # The stock entrypoint gosu-drops to the `marp` user and execs marp-cli.js;
 # we cleanly override it: switch to the marp user directly and run uvicorn.

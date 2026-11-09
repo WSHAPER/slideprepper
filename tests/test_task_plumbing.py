@@ -54,7 +54,7 @@ from tests.conftest import VALID_DECK
 
 TASK = {
     "id": 5,
-    "type": "marp_slides:slide_deck_generation",
+    "type": "slideprepper:slide_deck_generation",
     "status": "STATUS_RUNNING",
     "userId": "alice",
     "appId": "context_agent",
@@ -508,7 +508,7 @@ def test_files_delivery_sends_rendered_files_and_source_before_report(
     )
     (record,) = recordings
     assert record["user_id"] == "alice"  # threaded from process_task
-    assert record["folder"] == "Marp Slides"  # the deployment default, on
+    assert record["folder"] == "SlidePrepper"  # the deployment default, on
     assert record["deck_stem"] == "Quarterly-Review"  # the per-deck subdir
     assert record["files"] == [
         ("Quarterly-Review.pptx", b"PK-editable", PPTX_MIME_TYPE),
@@ -603,17 +603,17 @@ def test_re_render_path_delivers_files_too(monkeypatch, settings) -> None:
         nc,
         {
             "id": 6,
-            "type": "marp_slides:re_render",
+            "type": "slideprepper:re_render",
             "status": "STATUS_RUNNING",
             "userId": "alice",
-            "appId": "marp_slides",
+            "appId": "slideprepper",
             "input": {"deck_source_file": 303, "output_format": "pptx"},
         },
         settings,
     )
     (record,) = recordings
     assert record["user_id"] == "alice"
-    assert record["folder"] == "Marp Slides"
+    assert record["folder"] == "SlidePrepper"
     assert record["deck_stem"] == "Quarterly-Review"
     assert record["files"] == [
         ("Quarterly-Review.pptx", b"PK-editable", PPTX_MIME_TYPE),
@@ -638,10 +638,10 @@ def re_render_task(task_input: dict) -> dict:
     """A re-render task payload carrying ``task_input`` verbatim."""
     return {
         "id": 8,
-        "type": "marp_slides:re_render",
+        "type": "slideprepper:re_render",
         "status": "STATUS_RUNNING",
         "userId": "alice",
-        "appId": "marp_slides",
+        "appId": "slideprepper",
         "input": task_input,
     }
 
@@ -1145,7 +1145,7 @@ def test_slide_failure_before_extraction_logs_no_excerpt(
 def test_log_excerpt_off_suppresses_excerpt_keeps_error_line(
     monkeypatch, settings, caplog
 ) -> None:
-    """MARP_SLIDES_LOG_EXCERPT=false keeps the WARNING error line (what
+    """SLIDEPREPPER_LOG_EXCERPT=false keeps the WARNING error line (what
     failed, which task) but drops the 240-char markdown excerpt: deck
     content never reaches docker logs in privacy-sensitive deployments."""
     slides = [SLIDES_OK[0], "# Bad slide\n\n### ###", SLIDES_OK[1], SLIDES_OK[2]]
@@ -1201,7 +1201,7 @@ def test_loop_layers_admin_config_over_env(monkeypatch, settings) -> None:
     """Each claimed task resolves the admin appconfig overrides afresh:
     a knob set on the server (UI or occ) reaches the next processed task
     without a restart, layered over the env-derived base."""
-    nc, api = make_fake_nc(appconfig={"MARP_SLIDES_MAX_SLIDES": "2"})
+    nc, api = make_fake_nc(appconfig={"SLIDEPREPPER_MAX_SLIDES": "2"})
     state = {"calls": 0}
 
     def fake_next_task(providers, types):
@@ -1408,7 +1408,7 @@ def test_build_value_error_maps_to_deck_failure(monkeypatch, settings) -> None:
 
 
 def test_retry_disabled_by_knob(monkeypatch, settings) -> None:
-    """MARP_SLIDES_RETRY_LLM=false: every phase gets exactly one attempt, so
+    """SLIDEPREPPER_RETRY_LLM=false: every phase gets exactly one attempt, so
     a bad slide fails the task instead of retrying."""
     slides = [SLIDES_OK[0], "## Bad\n\n### ###", SLIDES_OK[2]]
     fake, calls = deck_scheduler(slides)
@@ -2328,7 +2328,7 @@ def test_total_llm_cap_across_all_calls(monkeypatch, settings, caplog) -> None:
         result["output"] is not None or result["user_facing_error_message"] is not None
     )
     assert "total time cap of 1800 seconds" in result["user_facing_error_message"]
-    assert "MARP_SLIDES_TOTAL_LLM_TIMEOUT" in result["user_facing_error_message"]
+    assert "SLIDEPREPPER_TOTAL_LLM_TIMEOUT" in result["user_facing_error_message"]
 
 
 def test_every_round_gets_only_the_remaining_budget(monkeypatch, settings) -> None:
@@ -2804,7 +2804,7 @@ def test_fitting_deck_pipeline_output_unchanged(monkeypatch, settings) -> None:
 
 
 def test_overflow_check_off_skips_both_gates(monkeypatch, settings) -> None:
-    """MARP_SLIDES_OVERFLOW_CHECK=false: both gates no-op, the drivers are
+    """SLIDEPREPPER_OVERFLOW_CHECK=false: both gates no-op, the drivers are
     never invoked (the toggle skips the checks; it does not fake a fit)."""
     calls: list[str] = []
 
@@ -2918,20 +2918,21 @@ def test_nextcloud_theme_measurement_gets_theming_values(monkeypatch, settings) 
 
 
 def test_overflow_check_env_round_trip() -> None:
-    """MARP_SLIDES_OVERFLOW_CHECK: default on; 'false'/'0' disable, 'true'
+    """SLIDEPREPPER_OVERFLOW_CHECK: default on; 'false'/'0' disable, 'true'
     and empty re-enable (the same parsing as the other boolean knobs)."""
     assert Settings.from_env({}).overflow_check is DEFAULT_OVERFLOW_CHECK is True
     assert (
-        Settings.from_env({"MARP_SLIDES_OVERFLOW_CHECK": "false"}).overflow_check
+        Settings.from_env({"SLIDEPREPPER_OVERFLOW_CHECK": "false"}).overflow_check
         is False
     )
     assert (
-        Settings.from_env({"MARP_SLIDES_OVERFLOW_CHECK": "0"}).overflow_check is False
+        Settings.from_env({"SLIDEPREPPER_OVERFLOW_CHECK": "0"}).overflow_check is False
     )
     assert (
-        Settings.from_env({"MARP_SLIDES_OVERFLOW_CHECK": "true"}).overflow_check is True
+        Settings.from_env({"SLIDEPREPPER_OVERFLOW_CHECK": "true"}).overflow_check
+        is True
     )
-    assert Settings.from_env({"MARP_SLIDES_OVERFLOW_CHECK": ""}).overflow_check is True
+    assert Settings.from_env({"SLIDEPREPPER_OVERFLOW_CHECK": ""}).overflow_check is True
 
 
 # --- draft checkpoints: cadence, resume, failure notice  ------
@@ -3355,7 +3356,7 @@ def test_failed_task_carries_draft_notice_exactly_once(
 
 
 def test_no_draft_notice_when_drafts_disabled(monkeypatch, fake_draft_store) -> None:
-    """MARP_SLIDES_DRAFTS_ENABLED=false: no checkpoint is written at all,
+    """SLIDEPREPPER_DRAFTS_ENABLED=false: no checkpoint is written at all,
     so the failure message carries no draft line (nothing to resume)."""
     slides = [SLIDES_OK[0], BAD_SLIDE, "# Still bad\n\n### ###"]
     fake, _calls = deck_scheduler(slides)

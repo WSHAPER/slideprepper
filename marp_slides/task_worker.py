@@ -9,7 +9,7 @@ is two-phase: ONE short constrained LLM call plans the deck as a JSON
 outline (titles + summaries, phase 1), then ONE call per planned slide
 writes just that slide's Marp Markdown (phase 2). Shorter per-call output
 means far fewer validation failures, a bad slide retries only itself (2
-attempts per slide, ``MARP_SLIDES_RETRY_LLM=false`` disables the retry in
+attempts per slide, ``SLIDEPREPPER_RETRY_LLM=false`` disables the retry in
 both phases), and progress becomes real ("slide 3 of 10"). The validated
 slides are assembled with the frontmatter and footer/header chrome derived
 from the outline and validated once as a whole deck against the strict
@@ -22,13 +22,13 @@ rendered by marp-cli into a single standalone HTML file (Node only);
 never reaches Chromium), then renders the PDF via marp-cli driving the
 Chromium bundled in the base image, the one output path that uses the
 browser. All LLM calls share one total-time budget
-(``MARP_SLIDES_TOTAL_LLM_TIMEOUT``): a round never gets more than the
+(``SLIDEPREPPER_TOTAL_LLM_TIMEOUT``): a round never gets more than the
 remaining budget. When a slide fails validation, a deterministic heuristic
 repair round first attempts known trivial fixes (:mod:`marp_slides.repair`)
 and re-validates; only when repair cannot rescue the slide is a per-slide
 self-correcting retry scheduled. A slide that passes validation is also
 measured against its theme box (best-effort render measurement,
-``MARP_SLIDES_OVERFLOW_CHECK``; a ``nextcloud``-themed deck measures with
+``SLIDEPREPPER_OVERFLOW_CHECK``; a ``nextcloud``-themed deck measures with
 the instance-branded theme values): an overflowing slide fails right
 there with the quantified overflow message, so the same
 repair-then-retry machinery gets a chance to slim it before assembly; a
@@ -62,18 +62,18 @@ The final validated Marp Markdown is
 retained as ``slide_deck_source`` so a later turn can make small edits without
 a full recompute. On success every generated deck file plus that source
 markdown is also delivered into the task owner's Files under
-``MARP_SLIDES_DELIVERIES_FOLDER`` (default "Marp Slides", empty disables):
+``SLIDEPREPPER_DELIVERIES_FOLDER`` (default "SlidePrepper", empty disables):
 fail-soft, before the result is reported and with no progress ping around
 it (the zombie constraint applies to the delivery too), while the appdata
 task outputs stay unchanged. Every failure path ends in ``report_result`` with an actionable
 ``user_facing_error_message``; deck failures additionally log a
 240-character excerpt of the offending slide or deck markdown (WARNING,
 single line) so they are diagnosable from docker logs, unless
-``MARP_SLIDES_LOG_EXCERPT=false`` suppresses the excerpt for
+``SLIDEPREPPER_LOG_EXCERPT=false`` suppresses the excerpt for
 privacy-sensitive deployments (the error line itself always logs).
 
-A second task type, ``marp_slides:re_render`` (provider
-``marp-slides:re_renderer``), is the deterministic half of the
+A second task type, ``slideprepper:re_render`` (provider
+``slideprepper:re_renderer``), is the deterministic half of the
 edit-source-then-re-render flow: it takes a complete Marp Markdown source
 (typically the retained ``slide_deck_source`` after edits), runs it
 through the SAME validator and the SAME render phase, and never calls the
@@ -99,7 +99,7 @@ resolves for the owner, a copy beside the deck otherwise), so it is
 usable in a text editor and meaningful outside the pipeline.
 
 Draft checkpoints make the authoring pipeline resumable: with drafts
-enabled (``MARP_SLIDES_DRAFTS_ENABLED=false`` turns it off), every
+enabled (``SLIDEPREPPER_DRAFTS_ENABLED=false`` turns it off), every
 generation task checkpoints its outline and each completed slide as an
 atomic JSON document on the ExApp persistent volume
 (:mod:`marp_slides.draft_store`). A task that fails mid-flight appends
@@ -114,7 +114,7 @@ draft id (the shape :mod:`marp_slides.draft_delivery` pins), the worker
 extracts it and routes into the existing ``draft_id`` resume path, so a
 pruned checkpoint surfaces the store's actionable remedy either way.
 Retention
-keeps the newest ``MARP_SLIDES_DRAFTS_MAX_KEPT`` drafts after every task.
+keeps the newest ``SLIDEPREPPER_DRAFTS_MAX_KEPT`` drafts after every task.
 """
 
 from __future__ import annotations
@@ -266,7 +266,7 @@ def _log_deck_failure(
     """Diagnosability from docker logs: a short excerpt of the EXTRACTED deck
     markdown (deck content only, never the user prompt), newlines escaped so
     it stays a single WARNING line. ``log_excerpt=False`` (the
-    MARP_SLIDES_LOG_EXCERPT=false deployment knob) suppresses the excerpt,
+    SLIDEPREPPER_LOG_EXCERPT=false deployment knob) suppresses the excerpt,
     the error line itself always logs."""
     if markdown is None:
         LOGGER.warning("Task %s %s: %s", task_id, context, error)
@@ -345,7 +345,7 @@ def _total_llm_cap_error(cap_s: int) -> DeckError:
     return DeckError(
         f"the language model exceeded the total time cap of {cap_s} seconds across its "
         "attempts. Simplify the presentation request (for example fewer slides), or ask an "
-        "administrator to raise the MARP_SLIDES_TOTAL_LLM_TIMEOUT setting."
+        "administrator to raise the SLIDEPREPPER_TOTAL_LLM_TIMEOUT setting."
     )
 
 
@@ -2590,7 +2590,7 @@ def _generate_deck(
     drafts: _DraftSession | None = None,
     user_id: str | None = None,
 ) -> str:
-    """The authoring pipeline (the ``marp_slides:slide_deck_generation``
+    """The authoring pipeline (the ``slideprepper:slide_deck_generation``
     task): validate the inputs, author the deck via the inner LLM, then
     render it through the shared render phase. Returns the validated
     markdown (the caller's failure-logging excerpt source). The optional

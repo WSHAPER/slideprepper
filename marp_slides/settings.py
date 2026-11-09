@@ -11,12 +11,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
-APP_ID = "marp_slides"
+APP_ID = "slideprepper"
 # keep in sync with appinfo/info.xml (pinned by tests/test_versions.py)
 APP_VERSION = "0.1.1"
 
-TASK_TYPE_ID = "marp_slides:slide_deck_generation"
-PROVIDER_ID = "marp_slides-deck_renderer"
+TASK_TYPE_ID = "slideprepper:slide_deck_generation"
+PROVIDER_ID = "slideprepper-deck_renderer"
 PROVIDER_NAME = "Marp Slide Deck Renderer"
 EXPECTED_RUNTIME_S = 120
 
@@ -25,8 +25,8 @@ EXPECTED_RUNTIME_S = 120
 #: complete Marp Markdown source (typically the retained
 #: ``slide_deck_source`` after edits), so the expected runtime is the render
 #: cost only, no authoring round.
-RE_RENDER_TASK_TYPE_ID = "marp_slides:re_render"
-RE_RENDER_PROVIDER_ID = "marp-slides:re_renderer"
+RE_RENDER_TASK_TYPE_ID = "slideprepper:re_render"
+RE_RENDER_PROVIDER_ID = "slideprepper:re_renderer"
 RE_RENDER_PROVIDER_NAME = "Marp Slide Deck Re-renderer"
 RE_RENDER_EXPECTED_RUNTIME_S = 10
 
@@ -59,7 +59,7 @@ OUTPUT_FORMAT_DESCRIPTION = (
 )
 
 #: Default ``output_format`` of the GENERATION task type
-#: (``marp_slides:slide_deck_generation``) and its worker fallback: ``all``
+#: (``slideprepper:slide_deck_generation``) and its worker fallback: ``all``
 #: hands the user every deliverable (pptx, html and pdf plus the retained
 #: Markdown source) unless they deliberately narrow the selection. The
 #: re-render task keeps ``pptx`` (a single-deliverable refresh flow).
@@ -97,7 +97,7 @@ DEFAULT_RETRY_LLM = True
 #: Deck failures log a 240-char excerpt of the extracted markdown (WARNING,
 #: single line) for docker-logs diagnosability. The excerpt is prompt-derived
 #: deck content: privacy-sensitive deployments can suppress it with
-#: ``MARP_SLIDES_LOG_EXCERPT=false``; the error line itself always stays
+#: ``SLIDEPREPPER_LOG_EXCERPT=false``; the error line itself always stays
 DEFAULT_LOG_EXCERPT = True
 
 #: Early slide-fit gates: every authored slide is measured against its
@@ -106,7 +106,7 @@ DEFAULT_LOG_EXCERPT = True
 #: backs the render phase as a non-retryable deck-level gate. Measurement
 #: is best-effort: an infrastructure outage (Chromium missing, render
 #: crash) logs and skips the check, never blocks deck delivery. Disable
-#: both gates with ``MARP_SLIDES_OVERFLOW_CHECK=false``.
+#: both gates with ``SLIDEPREPPER_OVERFLOW_CHECK=false``.
 DEFAULT_OVERFLOW_CHECK = True
 
 #: Draft retention: failed attempts keep their
@@ -119,7 +119,7 @@ DEFAULT_DRAFTS_MAX_KEPT = 20
 #: Files-by-default delivery: every generated deck
 #: format plus the source markdown is written into this folder in the
 #: task owner's Files (DAV impersonation, fail-soft). Empty disables.
-DEFAULT_DELIVERIES_FOLDER = "Marp Slides"
+DEFAULT_DELIVERIES_FOLDER = "SlidePrepper"
 
 #: How long a read-through of the admin appconfig stays fresh: a value an
 #: admin saves (declarative settings UI or occ) applies to tasks claimed
@@ -205,40 +205,40 @@ class Settings:
         return cls(
             app_port=_env_int(env, "APP_PORT", DEFAULT_APP_PORT),
             poll_interval_s=_env_float(
-                env, "MARP_SLIDES_POLL_INTERVAL", DEFAULT_POLL_INTERVAL_S
+                env, "SLIDEPREPPER_POLL_INTERVAL", DEFAULT_POLL_INTERVAL_S
             ),
             marp_timeout_s=_env_int(
-                env, "MARP_SLIDES_MARP_TIMEOUT", DEFAULT_MARP_TIMEOUT_S
+                env, "SLIDEPREPPER_MARP_TIMEOUT", DEFAULT_MARP_TIMEOUT_S
             ),
             llm_timeout_s=_env_int(
-                env, "MARP_SLIDES_LLM_TIMEOUT", DEFAULT_LLM_TIMEOUT_S
+                env, "SLIDEPREPPER_LLM_TIMEOUT", DEFAULT_LLM_TIMEOUT_S
             ),
             total_llm_timeout_s=_env_int(
-                env, "MARP_SLIDES_TOTAL_LLM_TIMEOUT", DEFAULT_TOTAL_LLM_TIMEOUT_S
+                env, "SLIDEPREPPER_TOTAL_LLM_TIMEOUT", DEFAULT_TOTAL_LLM_TIMEOUT_S
             ),
             max_prompt_chars=_env_int(
-                env, "MARP_SLIDES_MAX_PROMPT_CHARS", DEFAULT_MAX_PROMPT_CHARS
+                env, "SLIDEPREPPER_MAX_PROMPT_CHARS", DEFAULT_MAX_PROMPT_CHARS
             ),
             max_deck_bytes=_env_int(
-                env, "MARP_SLIDES_MAX_DECK_BYTES", DEFAULT_MAX_DECK_BYTES
+                env, "SLIDEPREPPER_MAX_DECK_BYTES", DEFAULT_MAX_DECK_BYTES
             ),
-            max_slides=_env_int(env, "MARP_SLIDES_MAX_SLIDES", DEFAULT_MAX_SLIDES),
-            marp_bin=env.get("MARP_SLIDES_MARP_BIN", DEFAULT_MARP_BIN)
+            max_slides=_env_int(env, "SLIDEPREPPER_MAX_SLIDES", DEFAULT_MAX_SLIDES),
+            marp_bin=env.get("SLIDEPREPPER_MARP_BIN", DEFAULT_MARP_BIN)
             or DEFAULT_MARP_BIN,
-            retry_llm=_env_bool(env, "MARP_SLIDES_RETRY_LLM", DEFAULT_RETRY_LLM),
-            log_excerpt=_env_bool(env, "MARP_SLIDES_LOG_EXCERPT", DEFAULT_LOG_EXCERPT),
+            retry_llm=_env_bool(env, "SLIDEPREPPER_RETRY_LLM", DEFAULT_RETRY_LLM),
+            log_excerpt=_env_bool(env, "SLIDEPREPPER_LOG_EXCERPT", DEFAULT_LOG_EXCERPT),
             overflow_check=_env_bool(
-                env, "MARP_SLIDES_OVERFLOW_CHECK", DEFAULT_OVERFLOW_CHECK
+                env, "SLIDEPREPPER_OVERFLOW_CHECK", DEFAULT_OVERFLOW_CHECK
             ),
             drafts_enabled=_env_bool(
-                env, "MARP_SLIDES_DRAFTS_ENABLED", DEFAULT_DRAFTS_ENABLED
+                env, "SLIDEPREPPER_DRAFTS_ENABLED", DEFAULT_DRAFTS_ENABLED
             ),
-            drafts_folder=env.get("MARP_SLIDES_DRAFTS_FOLDER", "").strip()
+            drafts_folder=env.get("SLIDEPREPPER_DRAFTS_FOLDER", "").strip()
             or DEFAULT_DRAFTS_FOLDER,
             drafts_max_kept=_env_int(
-                env, "MARP_SLIDES_DRAFTS_MAX_KEPT", DEFAULT_DRAFTS_MAX_KEPT
+                env, "SLIDEPREPPER_DRAFTS_MAX_KEPT", DEFAULT_DRAFTS_MAX_KEPT
             ),
-            deliveries_folder=env.get("MARP_SLIDES_DELIVERIES_FOLDER", "").strip()
+            deliveries_folder=env.get("SLIDEPREPPER_DELIVERIES_FOLDER", "").strip()
             or DEFAULT_DELIVERIES_FOLDER,
         )
 
@@ -263,7 +263,7 @@ class AdminConfigKnob:
 #: the surfaced total cap and slide count.
 ADMIN_CONFIG_KNOBS: tuple[AdminConfigKnob, ...] = (
     AdminConfigKnob(
-        key="MARP_SLIDES_TOTAL_LLM_TIMEOUT",
+        key="SLIDEPREPPER_TOTAL_LLM_TIMEOUT",
         attribute="total_llm_timeout_s",
         kind="int",
         label="Total inner LLM time cap (seconds)",
@@ -273,7 +273,7 @@ ADMIN_CONFIG_KNOBS: tuple[AdminConfigKnob, ...] = (
         ),
     ),
     AdminConfigKnob(
-        key="MARP_SLIDES_MAX_SLIDES",
+        key="SLIDEPREPPER_MAX_SLIDES",
         attribute="max_slides",
         kind="int",
         label="Maximum slides per deck",
@@ -283,7 +283,7 @@ ADMIN_CONFIG_KNOBS: tuple[AdminConfigKnob, ...] = (
         ),
     ),
     AdminConfigKnob(
-        key="MARP_SLIDES_MAX_PROMPT_CHARS",
+        key="SLIDEPREPPER_MAX_PROMPT_CHARS",
         attribute="max_prompt_chars",
         kind="int",
         label="Maximum user prompt length (characters)",
@@ -292,7 +292,7 @@ ADMIN_CONFIG_KNOBS: tuple[AdminConfigKnob, ...] = (
         ),
     ),
     AdminConfigKnob(
-        key="MARP_SLIDES_DRAFTS_FOLDER",
+        key="SLIDEPREPPER_DRAFTS_FOLDER",
         attribute="drafts_folder",
         kind="str",
         label="Files folder for draft checkpoints",
@@ -304,7 +304,7 @@ ADMIN_CONFIG_KNOBS: tuple[AdminConfigKnob, ...] = (
         ),
     ),
     AdminConfigKnob(
-        key="MARP_SLIDES_RETRY_LLM",
+        key="SLIDEPREPPER_RETRY_LLM",
         attribute="retry_llm",
         kind="bool",
         label="Retry failed LLM rounds once",
@@ -315,7 +315,7 @@ ADMIN_CONFIG_KNOBS: tuple[AdminConfigKnob, ...] = (
         ),
     ),
     AdminConfigKnob(
-        key="MARP_SLIDES_OVERFLOW_CHECK",
+        key="SLIDEPREPPER_OVERFLOW_CHECK",
         attribute="overflow_check",
         kind="bool",
         label="Slide overflow checks",
@@ -326,7 +326,7 @@ ADMIN_CONFIG_KNOBS: tuple[AdminConfigKnob, ...] = (
         ),
     ),
     AdminConfigKnob(
-        key="MARP_SLIDES_LOG_EXCERPT",
+        key="SLIDEPREPPER_LOG_EXCERPT",
         attribute="log_excerpt",
         kind="bool",
         label="Log deck-failure markdown excerpts",
@@ -339,7 +339,7 @@ ADMIN_CONFIG_KNOBS: tuple[AdminConfigKnob, ...] = (
         ),
     ),
     AdminConfigKnob(
-        key="MARP_SLIDES_DRAFTS_ENABLED",
+        key="SLIDEPREPPER_DRAFTS_ENABLED",
         attribute="drafts_enabled",
         kind="bool",
         label="Keep draft checkpoints",
@@ -367,11 +367,11 @@ ENV_ONLY_CONFIG_KEYS: tuple[str, ...] = (
     "APP_PORT",
     "APP_HOST",
     "NEXTCLOUD_URL",
-    "MARP_SLIDES_MARP_BIN",
-    "MARP_SLIDES_POLL_INTERVAL",
-    "MARP_SLIDES_MARP_TIMEOUT",
-    "MARP_SLIDES_LLM_TIMEOUT",
-    "MARP_SLIDES_MAX_DECK_BYTES",
+    "SLIDEPREPPER_MARP_BIN",
+    "SLIDEPREPPER_POLL_INTERVAL",
+    "SLIDEPREPPER_MARP_TIMEOUT",
+    "SLIDEPREPPER_LLM_TIMEOUT",
+    "SLIDEPREPPER_MAX_DECK_BYTES",
 )
 
 

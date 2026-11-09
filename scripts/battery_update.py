@@ -13,7 +13,7 @@ reviewed manual edit of the JSON with an equal justification):
 Exit codes: 0 updated (or nothing to tighten), 1 budgets would regress
 (refused; only improvements were written), 2 toolchain error (marp or
 Chromium missing or failing). Snap-Chromium hosts must point
-MARP_SLIDES_BATTERY_WORKDIR at a directory under $HOME (snap Chromium
+SLIDEPREPPER_BATTERY_WORKDIR at a directory under $HOME (snap Chromium
 cannot read /tmp file:// URIs); marp-cli 4.5.1 must be first on PATH.
 """
 

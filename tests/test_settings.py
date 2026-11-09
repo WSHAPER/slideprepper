@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 WSHAPER <42714629+WSHAPER@users.noreply.github.com>
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Settings defaults and MARP_SLIDES_* overrides."""
+"""Settings defaults and SLIDEPREPPER_* overrides."""
 
 from __future__ import annotations
 
@@ -37,14 +37,14 @@ def test_overrides() -> None:
     s = Settings.from_env(
         {
             "APP_PORT": "9091",
-            "MARP_SLIDES_POLL_INTERVAL": "2.5",
-            "MARP_SLIDES_MARP_TIMEOUT": "60",
-            "MARP_SLIDES_LLM_TIMEOUT": "120",
-            "MARP_SLIDES_TOTAL_LLM_TIMEOUT": "600",
-            "MARP_SLIDES_MAX_PROMPT_CHARS": "100",
-            "MARP_SLIDES_MAX_DECK_BYTES": "2048",
-            "MARP_SLIDES_MAX_SLIDES": "10",
-            "MARP_SLIDES_MARP_BIN": "/usr/local/bin/marp",
+            "SLIDEPREPPER_POLL_INTERVAL": "2.5",
+            "SLIDEPREPPER_MARP_TIMEOUT": "60",
+            "SLIDEPREPPER_LLM_TIMEOUT": "120",
+            "SLIDEPREPPER_TOTAL_LLM_TIMEOUT": "600",
+            "SLIDEPREPPER_MAX_PROMPT_CHARS": "100",
+            "SLIDEPREPPER_MAX_DECK_BYTES": "2048",
+            "SLIDEPREPPER_MAX_SLIDES": "10",
+            "SLIDEPREPPER_MARP_BIN": "/usr/local/bin/marp",
         }
     )
     assert s.app_port == 9091
@@ -59,20 +59,20 @@ def test_overrides() -> None:
 
 
 def test_retry_llm_knob() -> None:
-    assert Settings.from_env({"MARP_SLIDES_RETRY_LLM": "false"}).retry_llm is False
-    assert Settings.from_env({"MARP_SLIDES_RETRY_LLM": "0"}).retry_llm is False
-    assert Settings.from_env({"MARP_SLIDES_RETRY_LLM": "true"}).retry_llm is True
-    assert Settings.from_env({"MARP_SLIDES_RETRY_LLM": ""}).retry_llm is True
+    assert Settings.from_env({"SLIDEPREPPER_RETRY_LLM": "false"}).retry_llm is False
+    assert Settings.from_env({"SLIDEPREPPER_RETRY_LLM": "0"}).retry_llm is False
+    assert Settings.from_env({"SLIDEPREPPER_RETRY_LLM": "true"}).retry_llm is True
+    assert Settings.from_env({"SLIDEPREPPER_RETRY_LLM": ""}).retry_llm is True
 
 
 def test_log_excerpt_knob() -> None:
     """The deck-failure markdown excerpt defaults ON (diagnosability) and
-    MARP_SLIDES_LOG_EXCERPT=false suppresses it."""
+    SLIDEPREPPER_LOG_EXCERPT=false suppresses it."""
     assert Settings.from_env({}).log_excerpt is DEFAULT_LOG_EXCERPT is True
-    assert Settings.from_env({"MARP_SLIDES_LOG_EXCERPT": "false"}).log_excerpt is False
-    assert Settings.from_env({"MARP_SLIDES_LOG_EXCERPT": "0"}).log_excerpt is False
-    assert Settings.from_env({"MARP_SLIDES_LOG_EXCERPT": "true"}).log_excerpt is True
-    assert Settings.from_env({"MARP_SLIDES_LOG_EXCERPT": ""}).log_excerpt is True
+    assert Settings.from_env({"SLIDEPREPPER_LOG_EXCERPT": "false"}).log_excerpt is False
+    assert Settings.from_env({"SLIDEPREPPER_LOG_EXCERPT": "0"}).log_excerpt is False
+    assert Settings.from_env({"SLIDEPREPPER_LOG_EXCERPT": "true"}).log_excerpt is True
+    assert Settings.from_env({"SLIDEPREPPER_LOG_EXCERPT": ""}).log_excerpt is True
 
 
 def test_invalid_number_raises() -> None:
@@ -84,16 +84,16 @@ def test_draft_settings_round_trip(monkeypatch) -> None:
     """Draft retention knobs parse from env per the _env conventions:
     bool toggle, stripped folder (empty falls back to the default), and
     a positive int cap."""
-    monkeypatch.setenv("MARP_SLIDES_DRAFTS_ENABLED", "false")
-    monkeypatch.setenv("MARP_SLIDES_DRAFTS_FOLDER", "  Marp Slides drafts  ")
-    monkeypatch.setenv("MARP_SLIDES_DRAFTS_MAX_KEPT", "5")
+    monkeypatch.setenv("SLIDEPREPPER_DRAFTS_ENABLED", "false")
+    monkeypatch.setenv("SLIDEPREPPER_DRAFTS_FOLDER", "  SlidePrepper drafts  ")
+    monkeypatch.setenv("SLIDEPREPPER_DRAFTS_MAX_KEPT", "5")
     s = Settings.from_env()
     assert s.drafts_enabled is False
-    assert s.drafts_folder == "Marp Slides drafts"
+    assert s.drafts_folder == "SlidePrepper drafts"
     assert s.drafts_max_kept == 5
-    monkeypatch.delenv("MARP_SLIDES_DRAFTS_ENABLED")
-    monkeypatch.delenv("MARP_SLIDES_DRAFTS_FOLDER")
-    monkeypatch.delenv("MARP_SLIDES_DRAFTS_MAX_KEPT")
+    monkeypatch.delenv("SLIDEPREPPER_DRAFTS_ENABLED")
+    monkeypatch.delenv("SLIDEPREPPER_DRAFTS_FOLDER")
+    monkeypatch.delenv("SLIDEPREPPER_DRAFTS_MAX_KEPT")
     s = Settings.from_env()
     assert s.drafts_enabled is True
     assert s.drafts_folder == ""

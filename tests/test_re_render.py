@@ -39,10 +39,10 @@ DECK_FILE_ID = 303
 
 RE_RENDER_TASK = {
     "id": 7,
-    "type": "marp_slides:re_render",
+    "type": "slideprepper:re_render",
     "status": "STATUS_RUNNING",
     "userId": "alice",
-    "appId": "marp_slides",
+    "appId": "slideprepper",
     "input": {"deck_source_file": DECK_FILE_ID, "output_format": "pptx"},
 }
 
@@ -63,7 +63,7 @@ def deck_nc(
         mimetype="text/markdown",
         size=len(data),
         name="Quarterly-Review.md",
-        path="Marp Slides/Quarterly-Review.md",
+        path="SlidePrepper/Quarterly-Review.md",
     )
     files = FakeFilesAPI(
         {DECK_FILE_ID: source, **(nodes or {})},
@@ -118,7 +118,7 @@ def no_llm_no_real_render(monkeypatch):
 
 def test_re_render_task_type_shape() -> None:
     tt = task_definition.RE_RENDER_TASK_TYPE
-    assert tt.id == RE_RENDER_TASK_TYPE_ID == "marp_slides:re_render"
+    assert tt.id == RE_RENDER_TASK_TYPE_ID == "slideprepper:re_render"
     # picker first: the deck source FILE is the required primary control
     # (the form's first field), output_format second with its registered
     # default on the provider; both render directly in the basic flow
@@ -132,7 +132,7 @@ def test_re_render_task_type_shape() -> None:
 
 def test_re_render_provider_shape() -> None:
     provider = task_definition.RE_RENDER_PROVIDER
-    assert provider.id == RE_RENDER_PROVIDER_ID == "marp-slides:re_renderer"
+    assert provider.id == RE_RENDER_PROVIDER_ID == "slideprepper:re_renderer"
     assert provider.task_type == RE_RENDER_TASK_TYPE_ID
     assert provider.expected_runtime == 10  # deterministic: render cost only
     # the ONLY optional input left is the image override list; the markdown
@@ -239,12 +239,12 @@ def test_second_registration_is_distinct_from_the_authoring_one() -> None:
     assert task_definition.TASK_TYPE.id != task_definition.RE_RENDER_TASK_TYPE.id
     assert task_definition.PROVIDER.id != task_definition.RE_RENDER_PROVIDER.id
     assert {TASK_TYPE_ID, RE_RENDER_TASK_TYPE_ID} == {
-        "marp_slides:slide_deck_generation",
-        "marp_slides:re_render",
+        "slideprepper:slide_deck_generation",
+        "slideprepper:re_render",
     }
     assert {PROVIDER_ID, RE_RENDER_PROVIDER_ID} == {
-        "marp_slides-deck_renderer",
-        "marp-slides:re_renderer",
+        "slideprepper-deck_renderer",
+        "slideprepper:re_renderer",
     }
 
 
@@ -637,11 +637,11 @@ def test_picked_md_resolves_relative_paths_against_its_folder(
         mimetype="text/markdown",
         size=len(doc),
         name="Quarterly-Review.md",
-        path="Marp Slides/Quarterly-Review/Quarterly-Review.md",
+        path="SlidePrepper/Quarterly-Review/Quarterly-Review.md",
     )
     blob = png_bytes()
     image = fake_node(
-        101, path="Marp Slides/Quarterly-Review/Quarterly-Review-img-1.png"
+        101, path="SlidePrepper/Quarterly-Review/Quarterly-Review-img-1.png"
     )
     files = FakeFilesAPI({303: source, 101: image}, {303: doc, 101: blob})
     nc, api = make_fake_nc(files=files)

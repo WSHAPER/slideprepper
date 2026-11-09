@@ -698,13 +698,13 @@ def test_convert_resolves_root_relative_paths() -> None:
 
 def test_convert_resolves_relative_paths_against_the_deck_folder() -> None:
     """The delivered .md references its images relative to its own folder
-    ('../../Photos/cat.png' from 'Marp Slides/Q/'): the base dir is what
+    ('../../Photos/cat.png' from 'SlidePrepper/Q/'): the base dir is what
     makes the traversal-bearing reference resolve."""
     node = fake_node(101, path="Photos/cat.png")
     nc = path_nc({101: node}, {101: png_bytes()}, {"Photos/cat.png": node})
     markdown = "---\nmarp: true\ntitle: t\n---\n\n# T\n\n![img](../../Photos/cat.png)\n"
     converted, resolved, dropped = convert_path_references(
-        nc, markdown, base_dir="Marp Slides/Q", user_id="alice"
+        nc, markdown, base_dir="SlidePrepper/Q", user_id="alice"
     )
     assert "# T\n\n![img](#file:1)" in converted
     assert resolved == [101]
@@ -870,7 +870,7 @@ def test_delivered_paths_prefer_verified_originals() -> None:
     node = fake_node(101, path="Photos/my cat.png")
     nc = path_nc({101: node}, {101: png_bytes()}, {"Photos/my cat.png": node})
     paths, copies = resolve_delivered_image_paths(
-        nc, "alice", "Marp Slides", "Quarterly-Review", [101], [1]
+        nc, "alice", "SlidePrepper", "Quarterly-Review", [101], [1]
     )
     assert paths == {1: "../../Photos/my%20cat.png"}
     assert copies == []
@@ -886,7 +886,7 @@ def test_delivered_paths_copy_when_the_original_is_unverifiable() -> None:
     node = fake_node(101, path="Sharer/only/namespace.png")
     nc = path_nc({101: node}, {101: blob}, {})  # by_path cannot verify it
     paths, copies = resolve_delivered_image_paths(
-        nc, "alice", "Marp Slides", "Quarterly-Review", [101], [1]
+        nc, "alice", "SlidePrepper", "Quarterly-Review", [101], [1]
     )
     assert paths == {1: "Quarterly-Review-img-1.png"}
     assert copies == [("Quarterly-Review-img-1.png", blob, "image/png")]
@@ -899,7 +899,7 @@ def test_delivered_paths_keep_file_form_when_undownloadable() -> None:
     and the re-render degrade path still catches that."""
     nc = path_nc({}, {}, {})
     paths, copies = resolve_delivered_image_paths(
-        nc, "alice", "Marp Slides", "Quarterly-Review", [101], [1]
+        nc, "alice", "SlidePrepper", "Quarterly-Review", [101], [1]
     )
     assert paths == {}
     assert copies == []
@@ -916,7 +916,7 @@ def test_delivered_paths_copy_keeps_webp_original() -> None:
     )
     nc = path_nc({101: node}, {101: original}, {})  # by_path cannot verify it
     paths, copies = resolve_delivered_image_paths(
-        nc, "alice", "Marp Slides", "Quarterly-Review", [101], [1]
+        nc, "alice", "SlidePrepper", "Quarterly-Review", [101], [1]
     )
     assert paths == {1: "Quarterly-Review-img-1.webp"}
     assert copies == [("Quarterly-Review-img-1.webp", original, "image/webp")]

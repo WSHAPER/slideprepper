@@ -35,7 +35,7 @@ from marp_slides.settings import (
 )
 
 DRAFT_ID = "abc123def456"
-FOLDER = "Marp Slides drafts"
+FOLDER = "SlidePrepper drafts"
 
 #: The checkpointed Phase 1 outline JSON (verbatim dict, as stored).
 OUTLINE = {
@@ -323,8 +323,8 @@ def test_unsanitizable_stem_rejects_delivery(caplog):
 
 
 def test_folder_sanitization_matrix():
-    assert _folder_components("Marp Slides drafts") == ["Marp Slides drafts"]
-    assert _folder_components("/Marp Slides drafts/") == ["Marp Slides drafts"]
+    assert _folder_components("SlidePrepper drafts") == ["SlidePrepper drafts"]
+    assert _folder_components("/SlidePrepper drafts/") == ["SlidePrepper drafts"]
     assert _folder_components("Deck // drafts") == ["Deck", "drafts"]
     assert _folder_components("./drafts") == ["drafts"]
     assert _folder_components("...") == ["..."]  # legal, no traversal

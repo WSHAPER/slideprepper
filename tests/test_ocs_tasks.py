@@ -54,7 +54,7 @@ def test_schedule_and_wait_success() -> None:
         nc,
         "core:text2text",
         {"input": "hello"},
-        "marp_slides",
+        "slideprepper",
         timeout_s=60,
         sleep=lambda s: None,
     )
@@ -66,7 +66,7 @@ def test_schedule_and_wait_success() -> None:
     )
     assert payload == {
         "type": "core:text2text",
-        "appId": "marp_slides",
+        "appId": "slideprepper",
         "input": {"input": "hello"},
     }
     assert ocs.calls[1][1] == TASK_ENDPOINT.format(task_id=7)
@@ -88,7 +88,7 @@ def test_polls_until_successful() -> None:
         nc,
         "core:text2text",
         {"input": "x"},
-        "marp_slides",
+        "slideprepper",
         timeout_s=60,
         sleep=slept.append,
     )
@@ -110,7 +110,7 @@ def test_failure_surfaces_user_facing_error() -> None:
     nc = type("FakeNc", (), {"ocs": staticmethod(ocs)})()
     with pytest.raises(NestedTaskError, match="provider is offline"):
         schedule_and_wait(
-            nc, "core:text2text", {"input": "x"}, "marp_slides", sleep=lambda s: None
+            nc, "core:text2text", {"input": "x"}, "slideprepper", sleep=lambda s: None
         )
 
 
@@ -122,7 +122,7 @@ def test_cancelled_is_an_error() -> None:
     nc = type("FakeNc", (), {"ocs": staticmethod(ocs)})()
     with pytest.raises(NestedTaskError, match="core:text2text"):
         schedule_and_wait(
-            nc, "core:text2text", {"input": "x"}, "marp_slides", sleep=lambda s: None
+            nc, "core:text2text", {"input": "x"}, "slideprepper", sleep=lambda s: None
         )
 
 
@@ -138,7 +138,7 @@ def test_timeout_cap_enforced() -> None:
             nc,
             "core:text2text",
             {"input": "x"},
-            "marp_slides",
+            "slideprepper",
             timeout_s=300,
             sleep=lambda s: None,
             clock=clock,
@@ -153,7 +153,7 @@ def test_schedule_retries_transient_errors() -> None:
     )
     nc = type("FakeNc", (), {"ocs": staticmethod(ocs)})()
     output = schedule_and_wait(
-        nc, "core:text2text", {"input": "x"}, "marp_slides", sleep=lambda s: None
+        nc, "core:text2text", {"input": "x"}, "slideprepper", sleep=lambda s: None
     )
     assert output == {"output": "the deck text"}
 
@@ -170,7 +170,7 @@ def test_schedule_permanent_failure_is_actionable() -> None:
     nc = AlwaysDown()
     with pytest.raises(NestedTaskError, match="unreachable"):
         schedule_and_wait(
-            nc, "core:text2text", {"input": "x"}, "marp_slides", sleep=lambda s: None
+            nc, "core:text2text", {"input": "x"}, "slideprepper", sleep=lambda s: None
         )
 
 
@@ -192,7 +192,7 @@ def test_schedule_429_is_retried() -> None:
 
     nc = type("FakeNc", (), {"ocs": staticmethod(rate_limited_then_ok)})()
     output = schedule_and_wait(
-        nc, "core:text2text", {"input": "x"}, "marp_slides", sleep=lambda s: None
+        nc, "core:text2text", {"input": "x"}, "slideprepper", sleep=lambda s: None
     )
     assert output == {"output": "the deck text"}
 
@@ -215,7 +215,7 @@ def test_poll_429_is_retried() -> None:
 
     nc = type("FakeNc", (), {"ocs": staticmethod(rate_limited_once)})()
     output = schedule_and_wait(
-        nc, "core:text2text", {"input": "x"}, "marp_slides", sleep=lambda s: None
+        nc, "core:text2text", {"input": "x"}, "slideprepper", sleep=lambda s: None
     )
     assert output == {"output": "the deck text"}
 
@@ -232,7 +232,7 @@ def test_poll_other_nextcloud_error_surfaces() -> None:
     nc = Gone()
     with pytest.raises(NestedTaskError, match="polling"):
         schedule_and_wait(
-            nc, "core:text2text", {"input": "x"}, "marp_slides", sleep=lambda s: None
+            nc, "core:text2text", {"input": "x"}, "slideprepper", sleep=lambda s: None
         )
 
 
@@ -244,5 +244,5 @@ def test_missing_output_is_an_error() -> None:
     nc = type("FakeNc", (), {"ocs": staticmethod(ocs)})()
     with pytest.raises(NestedTaskError, match="without an output"):
         schedule_and_wait(
-            nc, "core:text2text", {"input": "x"}, "marp_slides", sleep=lambda s: None
+            nc, "core:text2text", {"input": "x"}, "slideprepper", sleep=lambda s: None
         )

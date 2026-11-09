@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-# CI (deterministic) tier of the marp_slides LLM eval lane.
+# CI (deterministic) tier of the slideprepper LLM eval lane.
 #
 # Run (pinned promptfoo; from the evals/ directory so relative file paths
 # and the promptfoo cache stay inside evals/):
@@ -29,7 +29,7 @@
 #
 # Before running after a prompt change:
 #   PYTHONPATH=<repo root> <venv python> evals/scripts/render_prompt_snapshots.py check
-description: marp_slides outline eval — CI tier (golden replay, deterministic assertions only)
+description: slideprepper outline eval — CI tier (golden replay, deterministic assertions only)
 
 prompts:
   - '{{outline_prompt}}'

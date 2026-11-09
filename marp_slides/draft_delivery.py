@@ -22,8 +22,8 @@ system tag applied best-effort, fail-soft on every problem):
 - :func:`deliver_deck_files`: when a deck task succeeds, every generated
   deck file plus the deck's Markdown source is written into a per-deck
   subdirectory of the deployment's ``deliveries_folder`` (default
-  ``Marp Slides``, so one deck's bundle lands in
-  ``Marp Slides/<deck_stem>/``), where the task owner OWNS editable
+  ``SlidePrepper``, so one deck's bundle lands in
+  ``SlidePrepper/<deck_stem>/``), where the task owner OWNS editable
   artifacts next to the appdata-locked task outputs (which stay
   unchanged) and multiple decks never pool into one flat folder. The
   names are the appdata file names themselves
@@ -54,7 +54,7 @@ when the tagging API is not reachable from app context the tag is
 skipped with a log line and the delivery stands.
 
 Note for manual re-renders: the draft-id comment leads the draft file,
-so the ``marp_slides:re_render`` task (which requires the frontmatter to
+so the ``slideprepper:re_render`` task (which requires the frontmatter to
 start the document) does not accept the draft file as-is; strip the
 comment line first. Resume flows do not read the draft file: they load
 the checkpoint from the draft store via ``draft_id``. The delivered

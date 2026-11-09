@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-# Nightly (model-graded) tier of the marp_slides LLM eval lane.
+# Nightly (model-graded) tier of the slideprepper LLM eval lane.
 #
 # Run (pinned promptfoo; from the evals/ directory):
 #
@@ -40,7 +40,7 @@
 # discipline (summaries sized so the slide can fit), and faithfulness to
 # the request — plus every deterministic pipeline gate from the CI tier.
 
-description: marp_slides outline eval — nightly tier (live model + judge rubrics, cached)
+description: slideprepper outline eval — nightly tier (live model + judge rubrics, cached)
 
 prompts:
   - '{{outline_prompt}}'

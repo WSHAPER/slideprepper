@@ -6,7 +6,7 @@
 # marp: @marp-team/marp-cli v4.5.1 (w/ @marp-team/marp-core v4.4.0)
 #
 # Update path (deliberate action, never automatic):
-#   MARP_SLIDES_UPDATE_GOLDEN_HASHES=1 pytest -m battery tests/test_golden_render.py
+#   SLIDEPREPPER_UPDATE_GOLDEN_HASHES=1 pytest -m battery tests/test_golden_render.py
 # (fails once by design: review the diff, commit this file, re-run)
 deck.md html a321912c8e5ef9d89b820888814767c954449581750ce0d6d4188e6c6c99df5c
 deck.md pdf 8b301154f8a3344df94e42aa54571e5076f0598e678e2c8da196d1903826c24f

@@ -40,7 +40,7 @@ from .task_worker import (
 
 LOGGER = logging.getLogger("marp_slides.controller")
 
-ADMIN_SETTINGS_FORM_ID = "marp_slides_settings"
+ADMIN_SETTINGS_FORM_ID = "slideprepper_settings"
 
 #: The declarative settings section AppAPI ships for ExApps (registered by
 #: app_api as "ExApps Settings"; see its lib/Settings/DeclarativeSettings).
@@ -64,7 +64,7 @@ def admin_settings_form() -> SettingsForm:
         id=ADMIN_SETTINGS_FORM_ID,
         section_type="admin",
         section_id=ADMIN_SETTINGS_SECTION_ID,
-        title="Marp Slides",
+        title="SlidePrepper",
         description=(
             "Operational knobs. A value saved here overrides the container "
             "environment variable of the same name and applies to new "

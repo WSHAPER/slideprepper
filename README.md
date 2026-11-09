@@ -1,6 +1,6 @@
 <div align="center">
 
-# marp_slides
+# SlidePrepper
 
 **Turn a prompt into a native, editable slide deck.**
 
@@ -14,13 +14,15 @@ A Nextcloud AppAPI ExApp: pptx, html or pdf authored from plain language.
 
 ---
 
+> **Naming note:** the product is called **SlidePrepper**; the Python package and this repository still carry the historical name `marp_slides` because the rendering engine is Marp and the internal module names predate the product rename.
+
 ## Why
 
 Slide generation inside Nextcloud today means either a Collabora round trip that converts a document you already wrote into slides, or filling JSON into a template with a fixed layout. Neither takes "explain X to audience Y" and hands back a finished deck.
 
 Language models can write slides, but two things break when you bolt one onto an office suite. Raw model output needs validation before it becomes a deliverable, and the easy rendering path, rasterizing slides to images, produces decks nobody can edit afterwards.
 
-marp_slides takes a plain prompt, has the instance's own text provider author strict Marp Markdown, validates it against an explicit construct allow-list, and rebuilds it as native PowerPoint content: real text boxes, list paragraphs, tables, hyperlinks, speaker notes. Or it renders a standalone HTML presentation or a PDF. The pptx opens editable in PowerPoint, OnlyOffice and Collabora. Anything the model writes that cannot map to native content is rejected with a message that says what to do instead; nothing degrades silently.
+SlidePrepper takes a plain prompt, has the instance's own text provider author strict Marp Markdown, validates it against an explicit construct allow-list, and rebuilds it as native PowerPoint content: real text boxes, list paragraphs, tables, hyperlinks, speaker notes. Or it renders a standalone HTML presentation or a PDF. The pptx opens editable in PowerPoint, OnlyOffice and Collabora. Anything the model writes that cannot map to native content is rejected with a message that says what to do instead; nothing degrades silently.
 
 ## Quick start
 
@@ -30,13 +32,13 @@ You need Nextcloud 33 to 35 with the [AppAPI](https://github.com/nextcloud/app_a
 ```bash
 git clone https://github.com/WSHAPER/marp_slides.git
 cd marp_slides
-docker build -t marp-slides:0.1.1 .
+docker build -t slideprepper:0.1.1 .
 ```
 
 Register the app on your instance, manually with occ or through whatever deployment automation already manages your AppAPI apps:
 
 ```bash
-occ app_api:app:register marp_slides \
+occ app_api:app:register slideprepper \
   --json-info "$(cat appinfo/info.xml | jq -Rs '{info: .}')" \
   --force-scopes --wait-finish
 ```
@@ -47,13 +49,13 @@ Editing a generated deck in place needs an office integration. Where Collabora's
 
 ## Configuration
 
-The operational knobs are admin-manageable at runtime. AppAPI renders them as a declarative settings form (Settings -> Administration -> ExApps Settings -> "Marp Slides"); a saved value is stored server-side and read by the ExApp per claimed task. The same keys are settable with occ:
+The operational knobs are admin-manageable at runtime. AppAPI renders them as a declarative settings form (Settings -> Administration -> ExApps Settings -> "SlidePrepper"); a saved value is stored server-side and read by the ExApp per claimed task. The same keys are settable with occ:
 
 ```bash
 # create (first time) or update (add --update-only) a server-side value
-occ app_api:app:config:set marp_slides MARP_SLIDES_MAX_SLIDES --value 40
-occ app_api:app:config:set marp_slides MARP_SLIDES_MAX_SLIDES --value 30 --update-only
-occ app_api:app:config:delete marp_slides MARP_SLIDES_MAX_SLIDES   # back to env/default
+occ app_api:app:config:set slideprepper SLIDEPREPPER_MAX_SLIDES --value 40
+occ app_api:app:config:set slideprepper SLIDEPREPPER_MAX_SLIDES --value 30 --update-only
+occ app_api:app:config:delete slideprepper SLIDEPREPPER_MAX_SLIDES   # back to env/default
 ```
 
 Precedence, highest first: **admin value** (declarative form or occ) > **environment variable** (deploy-time) > **built-in default**. The environment stays a fully working fallback: until an admin saves a value, behavior is exactly the env-driven behavior. An empty admin field means unset, and an invalid admin value fails soft to the env value (the ExApp log carries a warning naming the knob and the bad value). The form displays the built-in defaults as placeholders; it cannot see the container environment, so an env override still in force may differ from what the form shows.
@@ -62,16 +64,16 @@ Refresh semantics: the worker reads the admin values once per claimed task behin
 
 | Knob (admin key = env var) | Built-in default | Applies to |
 | --- | --- | --- |
-| `MARP_SLIDES_TOTAL_LLM_TIMEOUT` | 1800 s | total time budget of both inner LLM attempts |
-| `MARP_SLIDES_MAX_SLIDES` | 60 | upper slide bound per deck (per-task requests can only lower it) |
-| `MARP_SLIDES_MAX_PROMPT_CHARS` | 8192 | prompts longer than this are rejected before any LLM round |
-| `MARP_SLIDES_DRAFTS_FOLDER` | empty | Files folder receiving draft .md copies (empty keeps drafts on the ExApp volume) |
-| `MARP_SLIDES_RETRY_LLM` | true | one self-correcting retry of failed LLM rounds |
-| `MARP_SLIDES_OVERFLOW_CHECK` | true | per-slide overflow measurement and deck-level gate |
-| `MARP_SLIDES_LOG_EXCERPT` | true | 240-char deck-failure markdown excerpt in the log |
-| `MARP_SLIDES_DRAFTS_ENABLED` | true | keep draft checkpoints for resumable generation |
+| `SLIDEPREPPER_TOTAL_LLM_TIMEOUT` | 1800 s | total time budget of both inner LLM attempts |
+| `SLIDEPREPPER_MAX_SLIDES` | 60 | upper slide bound per deck (per-task requests can only lower it) |
+| `SLIDEPREPPER_MAX_PROMPT_CHARS` | 8192 | prompts longer than this are rejected before any LLM round |
+| `SLIDEPREPPER_DRAFTS_FOLDER` | empty | Files folder receiving draft .md copies (empty keeps drafts on the ExApp volume) |
+| `SLIDEPREPPER_RETRY_LLM` | true | one self-correcting retry of failed LLM rounds |
+| `SLIDEPREPPER_OVERFLOW_CHECK` | true | per-slide overflow measurement and deck-level gate |
+| `SLIDEPREPPER_LOG_EXCERPT` | true | 240-char deck-failure markdown excerpt in the log |
+| `SLIDEPREPPER_DRAFTS_ENABLED` | true | keep draft checkpoints for resumable generation |
 
-Not admin-manageable (environment only, when relevant): `APP_SECRET`, `APP_ID`, `APP_PORT`, `APP_HOST` and `NEXTCLOUD_URL` (AppAPI wiring and bind surface, read by nc_py_api itself), `MARP_SLIDES_MARP_BIN` and `MARP_SLIDES_POLL_INTERVAL` (container- and daemon-coupled), and the internal per-round caps `MARP_SLIDES_LLM_TIMEOUT`, `MARP_SLIDES_MARP_TIMEOUT` and `MARP_SLIDES_MAX_DECK_BYTES` (their admin-facing tuning axes are the surfaced total cap and slide count). The rule: a knob is surfaced when an instance admin plausibly tunes it at runtime; secrets, infra-coupled values and pipeline internals stay with the deployment. There is no LLM API key or endpoint to configure: the app schedules the instance's own `core:text2text` provider.
+Not admin-manageable (environment only, when relevant): `APP_SECRET`, `APP_ID`, `APP_PORT`, `APP_HOST` and `NEXTCLOUD_URL` (AppAPI wiring and bind surface, read by nc_py_api itself), `SLIDEPREPPER_MARP_BIN` and `SLIDEPREPPER_POLL_INTERVAL` (container- and daemon-coupled), and the internal per-round caps `SLIDEPREPPER_LLM_TIMEOUT`, `SLIDEPREPPER_MARP_TIMEOUT` and `SLIDEPREPPER_MAX_DECK_BYTES` (their admin-facing tuning axes are the surfaced total cap and slide count). The rule: a knob is surfaced when an instance admin plausibly tunes it at runtime; secrets, infra-coupled values and pipeline internals stay with the deployment. There is no LLM API key or endpoint to configure: the app schedules the instance's own `core:text2text` provider.
 
 Auditing: changes made with occ are centrally audit-logged by the admin_audit app whenever it is enabled (it records every console command with its arguments). Form saves are not covered by admin_audit; they appear in `nextcloud.log` as standard request lines (user and URL, no payload).
 
@@ -81,7 +83,7 @@ The task type takes a required text `prompt`, an optional `output_format` enum (
 
 `output_format` is a real ENUM shape with three registered values plus a default of `pptx`, and it is validated again inside the provider. So is `theme`: `auto` lets the model pick the best-fitting theme; any other value is a hard requirement the authoring prompt states and the validator enforces against the deck's frontmatter theme.
 
-A failed (or resumed) generation keeps its completed slides checkpointed as a draft; the failed task's message names its `draft_id`, and re-running with that id regenerates only the missing slides. When `MARP_SLIDES_DRAFTS_FOLDER` is set (for example `Marp Slides drafts`), the draft's current state is also copied into a per-deck subdirectory of that folder of the requesting user's Files as `<deck-stem>/<deck-stem>.draft.md`: a comment naming the draft id leads the file, followed by the deck frontmatter and the completed slides. The copy is fail-soft (delivery problems are logged, never task failures), the newest draft of a stem overwrites older ones (Nextcloud keeps the versions), and the file carries the visible "Generated using AI" system tag when the tagging API is reachable. Successful deliveries follow the same per-deck layout: every generated format of a deck plus its Markdown source lands in its own `Marp Slides/<deck-stem>/` subdirectory instead of pooling one flat folder.
+A failed (or resumed) generation keeps its completed slides checkpointed as a draft; the failed task's message names its `draft_id`, and re-running with that id regenerates only the missing slides. When `SLIDEPREPPER_DRAFTS_FOLDER` is set (for example `SlidePrepper drafts`), the draft's current state is also copied into a per-deck subdirectory of that folder of the requesting user's Files as `<deck-stem>/<deck-stem>.draft.md`: a comment naming the draft id leads the file, followed by the deck frontmatter and the completed slides. The copy is fail-soft (delivery problems are logged, never task failures), the newest draft of a stem overwrites older ones (Nextcloud keeps the versions), and the file carries the visible "Generated using AI" system tag when the tagging API is reachable. Successful deliveries follow the same per-deck layout: every generated format of a deck plus its Markdown source lands in its own `SlidePrepper/<deck-stem>/` subdirectory instead of pooling one flat folder.
 
 ### Constructs
 
@@ -122,7 +124,7 @@ flowchart TD
 ```
 
 - The worker is a background thread polling `next_task` every 5 s, woken immediately by AppAPI `/trigger` events. Chromium is involved in exactly one path: only `output_format=pdf` renders through the bundled browser; the syntax gate, the PPTX build and the HTML render are browserless.
-- When the inner LLM output fails extraction or validation, one self-correcting retry is scheduled with the validation error appended as feedback; gate, build and prompt failures are never retried. Progress reports at four phases (5% author, 50% validate, 80% build, 100% done) and both attempts share one total-time cap (`MARP_SLIDES_TOTAL_LLM_TIMEOUT`, default 1800 s, admin-adjustable; see Configuration).
+- When the inner LLM output fails extraction or validation, one self-correcting retry is scheduled with the validation error appended as feedback; gate, build and prompt failures are never retried. Progress reports at four phases (5% author, 50% validate, 80% build, 100% done) and both attempts share one total-time cap (`SLIDEPREPPER_TOTAL_LLM_TIMEOUT`, default 1800 s, admin-adjustable; see Configuration).
 - Visual parity with a browser render is not a goal; nativeness and editability are.
 - Every failure path ends in `report_result` with an actionable `user_facing_error_message`: invalid Markdown errors embed the parser output, inner LLM failures surface the nested task's error text, image-cap violations name the file id, the cap and the remedy.
 
@@ -148,7 +150,7 @@ Every task also uploads the final validated Marp Markdown as `<deckname>.md` nex
 - Images enter only as Nextcloud file ids in the `images` slot: the server authenticates the requesting user's access to every id before the task reaches the ExApp, and downloads go over the app-context API with sniffed type and size caps. Remote image URLs are rejected on purpose; fetching them would need its own egress design (redirects, private-IP ranges, DNS rebinding, content caps).
 - marp's default emoji handling swaps every emoji for `cdn.jsdelivr.net` image references, fetched at render time or by the viewer's browser. The strict `.marprc` used for all conversions disables the conversion, so emoji stay local-font text and no render touches a CDN.
 - Run `https://` for `NEXTCLOUD_URL` (the shared-secret header travels on every ExApp to server call), bind `APP_HOST` to the specific interface Nextcloud reaches instead of `0.0.0.0` on shared machines, firewall 9090 to that interface plus localhost, and egress-restrict the container to `NEXTCLOUD_URL`.
-- Deck-failure logs carry a 240-character excerpt of the generated Markdown only, never the user prompt; `MARP_SLIDES_LOG_EXCERPT=false` suppresses the excerpt while the error line always logs.
+- Deck-failure logs carry a 240-character excerpt of the generated Markdown only, never the user prompt; `SLIDEPREPPER_LOG_EXCERPT=false` suppresses the excerpt while the error line always logs.
 
 ## Development
 
@@ -199,8 +201,8 @@ offline gate suite).
 Real-code probe against the built image:
 
 ```bash
-docker build -t marp-slides:dev .
-docker run --rm -v "$PWD/fixtures:/w" -e PYTHONPATH=/app --entrypoint python3 marp-slides:dev /w/probe.py
+docker build -t slideprepper:dev .
+docker run --rm -v "$PWD/fixtures:/w" -e PYTHONPATH=/app --entrypoint python3 slideprepper:dev /w/probe.py
 ```
 
 Render audit (build a fixture, convert with Collabora or host LibreOffice, verify code-text survival, slide bounds and monospace fonts via pdftotext):
@@ -212,7 +214,7 @@ Render audit (build a fixture, convert with Collabora or host LibreOffice, verif
 Standalone boot for debugging (the heartbeat serves even without a reachable Nextcloud; the worker retries):
 
 ```bash
-NEXTCLOUD_URL=https://cloud.example.com APP_ID=marp_slides APP_VERSION=0.1.1 \
+NEXTCLOUD_URL=https://cloud.example.com APP_ID=slideprepper APP_VERSION=0.1.1 \
 APP_SECRET=... AA_VERSION=2.2.0 APP_PORT=9090 .venv/bin/python main.py
 ```
 
@@ -239,7 +241,7 @@ The Dockerfile installs from the lock with `pip install --require-hashes` (every
 2. Tag `vX.Y.Z` and push the tag. `.github/workflows/release.yml` then:
    - fails unless the tag equals `APP_VERSION` in `appinfo/info.xml`;
    - fails if a GitHub release for that tag already exists (no re-releasing);
-   - builds the docker image `marp-slides:X.Y.Z` (not pushed — see below);
+   - builds the docker image `slideprepper:X.Y.Z` (not pushed — see below);
    - generates `sbom.cyclonedx.json` from `requirements.lock` with `cyclonedx-py` (pinned in the job), adds the app itself as the root component (name and version from `APP_VERSION`), and checksums it;
    - creates the GitHub release with the SBOM, its `.sha256`, and `image-digests.txt` (digests of the built image and its pinned base).
 3. Publishing the image to the registry `appinfo/info.xml` advertises (`docker.io`) is a deliberate manual step, run after reviewing the release's artifacts: `docker tag`/`docker push` of the built image, then `docker manifest inspect` to confirm the pushed digest matches `image-digests.txt`.

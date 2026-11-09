@@ -1,4 +1,4 @@
-# Release workflow for marp_slides: cuts a GitHub release with the CRA
+# Release workflow for slideprepper: cuts a GitHub release with the CRA
 # artifacts (machine-readable SBOM, checksums, image digests) whenever a
 # vX.Y.Z tag is pushed.
 #
@@ -48,7 +48,7 @@ jobs:
     timeout-minutes: 30
     env:
       GH_TOKEN: ${{ github.token }}
-      APP_ID: marp_slides
+      APP_ID: slideprepper
     steps:
       - uses: actions/checkout@v7
 
@@ -128,9 +128,9 @@ jobs:
           with open(path) as f:
               bom = json.load(f)
           bom["metadata"]["component"] = {
-              "bom-ref": f"marp_slides@{version}",
+              "bom-ref": f"slideprepper@{version}",
               "type": "application",
-              "name": "marp_slides",
+              "name": "slideprepper",
               "version": version,
           }
           with open(path, "w") as f:
@@ -145,17 +145,17 @@ jobs:
       - name: Create the GitHub release with the CRA artifacts
         run: |
           cat > release-notes.md <<EOF
-          # marp_slides ${APP_VERSION}
+          # slideprepper ${APP_VERSION}
 
           Cyber Resilience Act release artifacts:
 
           - \`sbom.cyclonedx.json\` — CycloneDX 1.6 SBOM generated from the committed \`requirements.lock\` (every locked dependency with its sha256 hashes); the app itself is the root component.
           - \`sbom.cyclonedx.json.sha256\` — checksum of the SBOM.
-          - \`image-digests.txt\` — digests of the built \`marp-slides:${APP_VERSION}\` image and its pinned base image.
+          - \`image-digests.txt\` — digests of the built \`slideprepper:${APP_VERSION}\` image and its pinned base image.
 
           The docker image is published to the registry advertised in \`appinfo/info.xml\` as a separate manual step.
           EOF
           gh release create "${GITHUB_REF_NAME}" \
-            --title "marp_slides ${APP_VERSION}" \
+            --title "slideprepper ${APP_VERSION}" \
             --notes-file release-notes.md \
             sbom.cyclonedx.json sbom.cyclonedx.json.sha256 image-digests.txt

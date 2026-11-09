@@ -165,11 +165,11 @@ def battery_workdir(tmp_path: Path) -> Path:
 
     Snap-confined Chromium cannot load ``file:///tmp/...`` URIs (its /tmp
     is private), so on hosts whose CHROME_PATH is a snap the
-    MARP_SLIDES_BATTERY_WORKDIR override points the battery at a
+    SLIDEPREPPER_BATTERY_WORKDIR override points the battery at a
     $HOME scratch directory; a regular Chromium reads pytest's tmp_path
     fine. The battery lane (marpteam image) needs no override.
     """
-    override = os.environ.get("MARP_SLIDES_BATTERY_WORKDIR")
+    override = os.environ.get("SLIDEPREPPER_BATTERY_WORKDIR")
     if override:
         workdir = Path(override)
         workdir.mkdir(parents=True, exist_ok=True)

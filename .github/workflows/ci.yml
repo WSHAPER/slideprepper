@@ -1,4 +1,4 @@
-# Continuous integration for marp_slides: the CI carrier for the tiered
+# Continuous integration for slideprepper: the CI carrier for the tiered
 # gate lanes (see README.md "Quality gates").
 #
 #   gates     scripts/check.sh verbatim — the hermetic gate suite (no

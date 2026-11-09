@@ -35,7 +35,7 @@ Workflow::
     pytest -m battery tests/test_golden_render.py
 
     # re-pin after a deliberate toolchain or pipeline change
-    MARP_SLIDES_UPDATE_GOLDEN_HASHES=1 pytest -m battery \\
+    SLIDEPREPPER_UPDATE_GOLDEN_HASHES=1 pytest -m battery \\
         tests/test_golden_render.py   # fails once by design: review + commit
     pytest -m battery tests/test_golden_render.py   # now green again
 
@@ -81,7 +81,7 @@ GOLDEN_DECKS = (
     "deck-images",
 )
 FORMATS = ("html", "pdf", "pptx")
-UPDATE_ENV = "MARP_SLIDES_UPDATE_GOLDEN_HASHES"
+UPDATE_ENV = "SLIDEPREPPER_UPDATE_GOLDEN_HASHES"
 
 _RENDER_CACHE: dict[tuple[str, str], tuple[bytes, bytes]] = {}
 _PINS_REBUILT = False
