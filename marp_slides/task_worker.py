@@ -125,7 +125,7 @@ import posixpath
 import re
 import tempfile
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import replace
 from math import ceil
@@ -199,6 +199,8 @@ from .repair import (
     strip_scoped_chrome,
 )
 from .settings import (
+    ADMIN_CONFIG_KEYS,
+    ADMIN_CONFIG_REFRESH_TTL_S,
     APP_ID,
     GENERATION_OUTPUT_FORMAT_DEFAULT,
     HTML_MIME_TYPE,
@@ -214,6 +216,7 @@ from .settings import (
     TEXT2TEXT_OUTPUT_KEY,
     TEXT2TEXT_TASK_TYPE_ID,
     Settings,
+    apply_admin_config,
 )
 from .theming import THEME_NAME, ThemingValues
 
@@ -2687,9 +2690,58 @@ def _generate_deck(
     return markdown
 
 
+class AdminConfigCache:
+    """Read-through cache for the admin appconfig knobs: a value an admin
+    saves (declarative settings UI or occ app_api:app:config:set) applies
+    to tasks claimed at least ``ttl_s`` after the save, without a restart.
+    A failed read (AppAPI unreachable, capability missing) negative-caches
+    for the same TTL and keeps the environment settings in force."""
+
+    def __init__(
+        self,
+        base: Settings,
+        *,
+        ttl_s: float = ADMIN_CONFIG_REFRESH_TTL_S,
+        clock: Callable[[], float] = monotonic,
+    ) -> None:
+        self._base = base
+        self._ttl_s = ttl_s
+        self._clock = clock
+        self._values: dict[str, str] = {}
+        self._expires_at = 0.0
+
+    def settings_for(self, nc: NextcloudApp) -> Settings:
+        now = self._clock()
+        if now >= self._expires_at:
+            self._values = self._read_values(nc)
+            self._expires_at = now + self._ttl_s
+        return apply_admin_config(self._base, self._values)
+
+    def _read_values(self, nc: NextcloudApp) -> dict[str, str]:
+        try:
+            records = nc.appconfig_ex.get_values(list(ADMIN_CONFIG_KEYS))
+        except (
+            NextcloudException,
+            RequestsConnectionError,
+            RequestsTimeout,
+            JSONDecodeError,
+            ValueError,
+        ) as exc:
+            LOGGER.warning(
+                "Admin config read failed; environment settings stay in force: %s",
+                exc,
+            )
+            return {}
+        return {record.key: record.value for record in records}
+
+
 def task_worker_loop(settings: Settings) -> None:
-    """Poll for tasks; claim one at a time and process it."""
+    """Poll for tasks; claim one at a time and process it. The env-derived
+    settings are the base layer: each claimed task resolves the admin
+    appconfig overrides afresh (behind the AdminConfigCache TTL), so knob
+    changes apply to new tasks without a restart."""
     poll_interval_s = max(1.0, settings.poll_interval_s)
+    admin_config = AdminConfigCache(settings)
     # Startup capability sweep: surface instance capability gaps the
     # delivered artifacts rely on as early as possible. Best-effort by
     # design: the fresh client carries no impersonated user, so the
@@ -2735,7 +2787,7 @@ def task_worker_loop(settings: Settings) -> None:
             continue
 
         try:
-            process_task(nc, task, settings)
+            process_task(nc, task, admin_config.settings_for(nc))
         except Exception:
             # process_task reports its own failures; this is a last resort.
             LOGGER.exception("process_task leaked an exception")

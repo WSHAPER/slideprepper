@@ -7,12 +7,14 @@ are never surfaced)."""
 from __future__ import annotations
 
 import logging
+from types import SimpleNamespace
 
 import pytest
 
 from marp_slides.settings import (
     ADMIN_CONFIG_KEYS,
     ADMIN_CONFIG_KNOBS,
+    ADMIN_CONFIG_REFRESH_TTL_S,
     DEFAULT_DRAFTS_FOLDER,
     DEFAULT_LOG_EXCERPT,
     DEFAULT_MAX_PROMPT_CHARS,
@@ -24,6 +26,7 @@ from marp_slides.settings import (
     Settings,
     apply_admin_config,
 )
+from marp_slides.task_worker import AdminConfigCache
 
 #: An env override per knob: proves the ADMIN value wins over env, and the
 #: env value over the built-in default (each distinct from both).
@@ -215,3 +218,108 @@ def test_layering_preserves_env_only_settings() -> None:
     assert layered.llm_timeout_s == 120
     assert layered.max_deck_bytes == 2048
     assert layered.marp_bin == "/usr/local/bin/marp"
+
+
+# --- read-through cache (the runtime refresh seam) -------------------------
+
+
+class _FakeAppConfigExAPI:
+    """The oc_appconfig_ex surface of the nc client: mutable values (what
+    an admin's save changed), a read counter, an optional read error."""
+
+    def __init__(self, values: dict[str, str] | None = None) -> None:
+        self.values: dict[str, str] = dict(values or {})
+        self.reads: list[list[str]] = []
+        self.error: Exception | None = None
+
+    def get_values(self, keys):
+        self.reads.append(list(keys))
+        if self.error is not None:
+            raise self.error
+        return [
+            SimpleNamespace(key=key, value=self.values[key])
+            for key in keys
+            if key in self.values
+        ]
+
+
+class _FakeClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def test_cache_reads_through_and_observes_change_after_ttl() -> None:
+    """Refresh semantics: one batched read serves the TTL window; a value
+    an admin saves is observed by a later task once the TTL expires (the
+    documented worst-case latency for a knob change)."""
+    appconfig = _FakeAppConfigExAPI({"MARP_SLIDES_MAX_SLIDES": "2"})
+    clock = _FakeClock()
+    cache = AdminConfigCache(
+        Settings.from_env({"MARP_SLIDES_MAX_SLIDES": "10"}),
+        ttl_s=ADMIN_CONFIG_REFRESH_TTL_S,
+        clock=clock,
+    )
+    nc = SimpleNamespace(appconfig_ex=appconfig)
+    assert cache.settings_for(nc).max_slides == 2  # admin beats env
+    appconfig.values["MARP_SLIDES_MAX_SLIDES"] = "3"
+    clock.now = 10.0
+    assert cache.settings_for(nc).max_slides == 2  # still fresh: no read
+    assert len(appconfig.reads) == 1
+    clock.now = ADMIN_CONFIG_REFRESH_TTL_S + 0.1
+    assert cache.settings_for(nc).max_slides == 3  # changed value observed
+    assert len(appconfig.reads) == 2
+
+
+def test_cache_batches_every_knob_key_in_one_read() -> None:
+    appconfig = _FakeAppConfigExAPI({})
+    clock = _FakeClock()
+    cache = AdminConfigCache(Settings(), clock=clock)
+    cache.settings_for(SimpleNamespace(appconfig_ex=appconfig))
+    assert appconfig.reads == [list(ADMIN_CONFIG_KEYS)]
+
+
+def test_cache_without_values_returns_env_settings() -> None:
+    base = Settings.from_env({"MARP_SLIDES_TOTAL_LLM_TIMEOUT": "600"})
+    cache = AdminConfigCache(base, clock=_FakeClock())
+    assert cache.settings_for(SimpleNamespace(appconfig_ex=_FakeAppConfigExAPI())) == (
+        base
+    )
+
+
+def test_cache_read_failure_negative_caches_and_keeps_env(caplog) -> None:
+    """An unreachable AppAPI (or a missing capability) keeps the
+    environment settings and does not hammer the server: the failed read
+    is cached for the same TTL."""
+    from nc_py_api import NextcloudException
+
+    appconfig = _FakeAppConfigExAPI()
+    appconfig.error = NextcloudException(997, "AppAPI unreachable")
+    clock = _FakeClock()
+    base = Settings.from_env({"MARP_SLIDES_MAX_SLIDES": "10"})
+    cache = AdminConfigCache(base, ttl_s=30.0, clock=clock)
+    nc = SimpleNamespace(appconfig_ex=appconfig)
+    with caplog.at_level(logging.WARNING, logger="marp_slides.task_worker"):
+        first = cache.settings_for(nc)
+        clock.now = 10.0
+        second = cache.settings_for(nc)
+    assert first == base == second
+    assert len(appconfig.reads) == 1  # the failure was negative-cached
+    assert "AppAPI unreachable" in caplog.text
+
+
+def test_cache_recovers_after_a_failed_read() -> None:
+    from nc_py_api import NextcloudException
+
+    appconfig = _FakeAppConfigExAPI({"MARP_SLIDES_MAX_SLIDES": "2"})
+    error = NextcloudException(997, "AppAPI unreachable")
+    appconfig.error = error
+    clock = _FakeClock()
+    cache = AdminConfigCache(Settings(), ttl_s=30.0, clock=clock)
+    nc = SimpleNamespace(appconfig_ex=appconfig)
+    assert cache.settings_for(nc).max_slides == Settings().max_slides
+    appconfig.error = None
+    clock.now = 30.1
+    assert cache.settings_for(nc).max_slides == 2

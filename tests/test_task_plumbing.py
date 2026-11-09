@@ -205,18 +205,36 @@ def fake_node(
 def make_fake_nc(
     files: FakeFilesAPI | None = None,
     capabilities: object | None = None,
+    appconfig: dict[str, str] | None = None,
 ) -> tuple[SimpleNamespace, FakeTaskProcessingAPI]:
     """The fake app client: task-processing + files APIs and the session
     capabilities dict (defaulting to empty; ``capabilities["theming"]`` is
-    what the branded-theme fetch reads). ``nc.impersonated`` records every
-    set_user call (the DAV impersonation the delivery and the path
-    resolution ride)."""
+    what the branded-theme fetch reads). ``appconfig`` seeds the admin
+    appconfig surface (oc_appconfig_ex) read per task by the worker loop.
+    ``nc.impersonated`` records every set_user call (the DAV impersonation
+    the delivery and the path resolution ride)."""
     api = FakeTaskProcessingAPI()
     impersonated: list[str] = []
+    appconfig_values = dict(appconfig or {})
+
+    class _FakeAppConfigExAPI:
+        def __init__(self) -> None:
+            self.reads: list[list[str]] = []
+
+        def get_values(self, keys):
+            self.reads.append(list(keys))
+            return [
+                SimpleNamespace(key=key, value=appconfig_values[key])
+                for key in keys
+                if key in appconfig_values
+            ]
+
+    appconfig_ex = _FakeAppConfigExAPI()
     nc = SimpleNamespace(
         providers=SimpleNamespace(task_processing=api),
         files=files,
         capabilities=capabilities if capabilities is not None else {},
+        appconfig_ex=appconfig_ex,
         impersonated=impersonated,
         set_user=impersonated.append,
     )
@@ -1177,6 +1195,42 @@ def test_loop_processes_until_stop(monkeypatch, settings) -> None:
         task_worker.APP_ENABLED.clear()
     assert state["calls"] == 2
     assert api.results and api.results[0]["output"] == SUCCESS_OUTPUT
+
+
+def test_loop_layers_admin_config_over_env(monkeypatch, settings) -> None:
+    """Each claimed task resolves the admin appconfig overrides afresh:
+    a knob set on the server (UI or occ) reaches the next processed task
+    without a restart, layered over the env-derived base."""
+    nc, api = make_fake_nc(appconfig={"MARP_SLIDES_MAX_SLIDES": "2"})
+    state = {"calls": 0}
+
+    def fake_next_task(providers, types):
+        state["calls"] += 1
+        if state["calls"] == 1:
+            return {"task": dict(TASK), "provider": {"name": "x"}}
+        task_worker.THREAD_STOP_EVENT.set()
+        return {}
+
+    api.next_task = fake_next_task
+    monkeypatch.setattr(task_worker, "NextcloudApp", lambda: nc)
+    captured: list[object] = []
+
+    def fake_process_task(nc_arg, task, effective):
+        captured.append(effective)
+
+    monkeypatch.setattr(task_worker, "process_task", fake_process_task)
+    monkeypatch.setattr(task_worker, "_wait_for_tasks", lambda interval: None)
+    task_worker.APP_ENABLED.set()
+    try:
+        task_worker.task_worker_loop(settings)
+    finally:
+        task_worker.THREAD_STOP_EVENT.clear()
+        task_worker.APP_ENABLED.clear()
+    assert len(captured) == 1
+    assert captured[0].max_slides == 2  # the admin value beats the env base
+    # everything not overridden rides through from the env base untouched
+    assert captured[0].total_llm_timeout_s == settings.total_llm_timeout_s
+    assert captured[0].drafts_folder == settings.drafts_folder
 
 
 def test_loop_survives_network_errors(monkeypatch, settings) -> None:
