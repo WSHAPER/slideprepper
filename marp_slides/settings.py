@@ -1,12 +1,15 @@
 # SPDX-FileCopyrightText: 2026 WSHAPER <42714629+WSHAPER@users.noreply.github.com>
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Environment-driven settings and immutable contract constants for the marp_slides ExApp."""
+"""Settings for the marp_slides ExApp: env-driven values, admin appconfig
+overrides (see apply_admin_config) and immutable contract constants."""
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from typing import Any
 
 APP_ID = "marp_slides"
 # keep in sync with appinfo/info.xml (pinned by tests/test_versions.py)
@@ -118,6 +121,16 @@ DEFAULT_DRAFTS_MAX_KEPT = 20
 #: task owner's Files (DAV impersonation, fail-soft). Empty disables.
 DEFAULT_DELIVERIES_FOLDER = "Marp Slides"
 
+#: How long a read-through of the admin appconfig stays fresh: a value an
+#: admin saves (declarative settings UI or occ) applies to tasks claimed
+#: at least this long after the save, without a restart.
+ADMIN_CONFIG_REFRESH_TTL_S = 30.0
+
+_ADMIN_BOOL_TRUE = ("1", "true", "yes", "on")
+_ADMIN_BOOL_FALSE = ("0", "false", "no", "off")
+
+LOGGER = logging.getLogger("marp_slides.settings")
+
 PPTX_MIME_TYPE = (
     "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 )
@@ -228,3 +241,185 @@ class Settings:
             deliveries_folder=env.get("MARP_SLIDES_DELIVERIES_FOLDER", "").strip()
             or DEFAULT_DELIVERIES_FOLDER,
         )
+
+
+@dataclass(frozen=True)
+class AdminConfigKnob:
+    """One admin-manageable knob: the ``oc_appconfig_ex`` key (the env var
+    name), the :class:`Settings` attribute it overrides, its value kind and
+    the human metadata the declarative settings form renders."""
+
+    key: str
+    attribute: str
+    kind: str  # "int" | "bool" | "str"
+    label: str
+    description: str
+
+
+#: The operational knobs an instance admin may tune at runtime (see
+#: README "Configuration"). Secrets and infra-coupled variables stay
+#: environment-only (ENV_ONLY_CONFIG_KEYS); internal per-round timeouts and
+#: byte gates stay environment-only too: their admin-facing tuning axis is
+#: the surfaced total cap and slide count.
+ADMIN_CONFIG_KNOBS: tuple[AdminConfigKnob, ...] = (
+    AdminConfigKnob(
+        key="MARP_SLIDES_TOTAL_LLM_TIMEOUT",
+        attribute="total_llm_timeout_s",
+        kind="int",
+        label="Total inner LLM time cap (seconds)",
+        description=(
+            "Total time budget across BOTH inner LLM attempts (the first "
+            "plus the self-correcting retry). Default: 1800."
+        ),
+    ),
+    AdminConfigKnob(
+        key="MARP_SLIDES_MAX_SLIDES",
+        attribute="max_slides",
+        kind="int",
+        label="Maximum slides per deck",
+        description=(
+            "Upper bound of slides the model may author for one deck; the "
+            "per-task request can only lower it. Default: 60."
+        ),
+    ),
+    AdminConfigKnob(
+        key="MARP_SLIDES_MAX_PROMPT_CHARS",
+        attribute="max_prompt_chars",
+        kind="int",
+        label="Maximum user prompt length (characters)",
+        description=(
+            "Prompts longer than this are rejected before any LLM round. Default: 8192."
+        ),
+    ),
+    AdminConfigKnob(
+        key="MARP_SLIDES_DRAFTS_FOLDER",
+        attribute="drafts_folder",
+        kind="str",
+        label="Files folder for draft checkpoints",
+        description=(
+            "When set, failed and resumed decks also copy their current "
+            "draft markdown into this folder of the requesting user's "
+            "Files. Empty keeps drafts on the ExApp volume only. "
+            "Default: empty."
+        ),
+    ),
+    AdminConfigKnob(
+        key="MARP_SLIDES_RETRY_LLM",
+        attribute="retry_llm",
+        kind="bool",
+        label="Retry failed LLM rounds once",
+        description=(
+            "One self-correcting retry when the deck fails extraction or "
+            "strict validation; disable to fail at the first attempt. "
+            "Default: true."
+        ),
+    ),
+    AdminConfigKnob(
+        key="MARP_SLIDES_OVERFLOW_CHECK",
+        attribute="overflow_check",
+        kind="bool",
+        label="Slide overflow checks",
+        description=(
+            "Measure every authored slide against its theme box and retry "
+            "or shrink overflowing slides. Disable only when the headless "
+            "renderer is unavailable on this instance. Default: true."
+        ),
+    ),
+    AdminConfigKnob(
+        key="MARP_SLIDES_LOG_EXCERPT",
+        attribute="log_excerpt",
+        kind="bool",
+        label="Log deck-failure markdown excerpts",
+        description=(
+            "When a generated deck fails validation, log a 240-character "
+            "excerpt of the extracted markdown (WARNING, deck content "
+            "only) for diagnosability. Set to false to suppress the "
+            "excerpt in privacy-sensitive deployments; the error line "
+            "itself is always logged. Default: true."
+        ),
+    ),
+    AdminConfigKnob(
+        key="MARP_SLIDES_DRAFTS_ENABLED",
+        attribute="drafts_enabled",
+        kind="bool",
+        label="Keep draft checkpoints",
+        description=(
+            "Failed attempts keep their completed slides as a checkpoint "
+            "so a follow-up task can resume; disable to always regenerate "
+            "from scratch. Default: true."
+        ),
+    ),
+)
+
+#: The oc_appconfig_ex keys read per task (in one batched call).
+ADMIN_CONFIG_KEYS: tuple[str, ...] = tuple(knob.key for knob in ADMIN_CONFIG_KNOBS)
+
+#: Deliberately NOT admin-manageable: AppAPI wiring and bind surface are read
+#: by nc_py_api itself; the marp binary path, the daemon poll cadence and the
+#: per-round subprocess timeout are container/runtime-relative; the inner
+#: per-round LLM timeout and the deck byte gate are internal pipeline details
+#: whose admin-facing axes are the surfaced total cap and slide count. This
+#: tuple exists so tests can pin the boundary (nothing secret or
+#: infra-coupled may ever join ADMIN_CONFIG_KNOBS).
+ENV_ONLY_CONFIG_KEYS: tuple[str, ...] = (
+    "APP_SECRET",
+    "APP_ID",
+    "APP_PORT",
+    "APP_HOST",
+    "NEXTCLOUD_URL",
+    "MARP_SLIDES_MARP_BIN",
+    "MARP_SLIDES_POLL_INTERVAL",
+    "MARP_SLIDES_MARP_TIMEOUT",
+    "MARP_SLIDES_LLM_TIMEOUT",
+    "MARP_SLIDES_MAX_DECK_BYTES",
+)
+
+
+def _parse_admin_bool(raw: str) -> bool | None:
+    """Strict bool parse for admin-set values (unlike :func:`_env_bool`, an
+    unrecognized token is a typo, not a False): True/False or None."""
+    token = raw.strip().lower()
+    if token in _ADMIN_BOOL_TRUE:
+        return True
+    if token in _ADMIN_BOOL_FALSE:
+        return False
+    return None
+
+
+def apply_admin_config(base: Settings, values: Mapping[str, str]) -> Settings:
+    """Layer admin-set appconfig values over ``base`` (the env settings):
+    a knob set on the server wins, an unset or empty key keeps the env
+    value, and an invalid value fails soft to the env value with a warning
+    naming the knob and the bad value."""
+    overrides: dict[str, Any] = {}
+    for knob in ADMIN_CONFIG_KNOBS:
+        raw = values.get(knob.key)
+        if raw is None or raw == "":
+            continue
+        if knob.kind == "int":
+            try:
+                # reuse the env parser so both sources accept the same shape
+                overrides[knob.attribute] = _env_int(values, knob.key, 0)
+            except ValueError:
+                LOGGER.warning(
+                    "Ignoring invalid admin value for %s: %r (expected an "
+                    "integer); the environment value stays in force",
+                    knob.key,
+                    raw,
+                )
+        elif knob.kind == "bool":
+            parsed = _parse_admin_bool(raw)
+            if parsed is None:
+                LOGGER.warning(
+                    "Ignoring invalid admin value for %s: %r (expected a "
+                    "boolean); the environment value stays in force",
+                    knob.key,
+                    raw,
+                )
+            else:
+                overrides[knob.attribute] = parsed
+        else:
+            stripped = raw.strip()
+            if stripped:
+                overrides[knob.attribute] = stripped
+    return replace(base, **overrides) if overrides else base
