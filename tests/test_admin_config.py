@@ -335,7 +335,7 @@ def test_admin_form_covers_exactly_the_knob_set() -> None:
     from marp_slides.controller import admin_settings_form
 
     form = admin_settings_form()
-    assert form.id == "slideprepper_settings"
+    assert form.id == "operational_settings"
     assert form.section_type == "admin"
     assert form.section_id == "declarative_settings"
     assert form.title == "SlidePrepper"
@@ -354,9 +354,54 @@ def test_admin_form_field_types_and_defaults_match_the_knobs() -> None:
     for field, knob in zip(form.fields, ADMIN_CONFIG_KNOBS, strict=True):
         assert field.title == knob.label
         assert field.description == knob.description
-        expected_type = {"int": "number", "bool": "checkbox", "str": "text"}[knob.kind]
+        expected_type = {"int": "number", "bool": "radio", "str": "text"}[knob.kind]
         assert field.type == SettingsFieldType(expected_type)
-        assert field.default == getattr(defaults, knob.attribute)
+        if knob.kind == "bool":
+            # yes/no radio carrying the built-in default as "1"/"0"
+            assert field.default == ("1" if getattr(defaults, knob.attribute) else "0")
+        else:
+            assert field.default == getattr(defaults, knob.attribute)
+
+
+def test_admin_form_id_survives_the_settings_ui_prefix_strip() -> None:
+    """Regression (verified live against Nextcloud 35 + app_api 35): the
+    settings UI submits form.id.replace(appId + '_', '') as the formId,
+    and app_api's SetValueListener drops the save silently when that
+    stripped id matches no registered form. A form id containing the app
+    prefix therefore makes every real-UI save a 200-and-forget no-op, so
+    the registered id must be invariant under the strip."""
+    from marp_slides.controller import ADMIN_SETTINGS_FORM_ID, admin_settings_form
+    from marp_slides.settings import APP_ID
+
+    form = admin_settings_form()
+    assert form.id == ADMIN_SETTINGS_FORM_ID
+    assert ADMIN_SETTINGS_FORM_ID.replace(f"{APP_ID}_", "") == ADMIN_SETTINGS_FORM_ID
+
+
+def test_admin_form_bools_are_radios_with_storable_values() -> None:
+    """Regression (verified live): an unchecked declarative checkbox saves
+    JSON false, app_api stores that as the empty string, and an empty
+    value means 'keep the environment value' in the precedence design,
+    so a checkbox knob could never be turned off through the UI. Boolean
+    knobs must therefore be Yes/No radios whose submitted strings ("1"/
+    "0") store verbatim and parse through the strict bool tokens."""
+    from marp_slides.controller import admin_settings_form
+    from marp_slides.settings import _parse_admin_bool
+
+    form = admin_settings_form()
+    bool_fields = [
+        f
+        for f, knob in zip(form.fields, ADMIN_CONFIG_KNOBS, strict=True)
+        if knob.kind == "bool"
+    ]
+    assert bool_fields  # the four toggles
+    for field in bool_fields:
+        assert isinstance(field.options, dict)
+        assert field.options == {"Yes": "1", "No": "0"}
+        for value in field.options.values():
+            assert value != ""
+            assert _parse_admin_bool(value) is not None
+        assert field.default in field.options.values()
 
 
 def test_admin_form_field_ids_never_include_env_only_variables() -> None:

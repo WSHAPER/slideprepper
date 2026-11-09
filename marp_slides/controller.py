@@ -22,6 +22,7 @@ from .settings import (
     ADMIN_CONFIG_REFRESH_TTL_S,
     PROVIDER_ID,
     RE_RENDER_PROVIDER_ID,
+    AdminConfigKnob,
     Settings,
 )
 from .task_definition import (
@@ -40,7 +41,14 @@ from .task_worker import (
 
 LOGGER = logging.getLogger("marp_slides.controller")
 
-ADMIN_SETTINGS_FORM_ID = "slideprepper_settings"
+#: The declarative form id. The Nextcloud settings UI submits
+#: ``form.id.replace(appId + '_', '')`` as the formId, so an id that
+#: CONTAINS the app prefix would make every real-UI save address a form
+#: id that does not exist: app_api's SetValueListener then drops the
+#: value silently (verified live: HTTP 200, nothing stored). The id must
+#: therefore not contain the app prefix; the replace becomes a no-op and
+#: the submitted formId matches the registered form.
+ADMIN_SETTINGS_FORM_ID = "operational_settings"
 
 #: The declarative settings section AppAPI ships for ExApps (registered by
 #: app_api as "ExApps Settings"; see its lib/Settings/DeclarativeSettings).
@@ -48,9 +56,26 @@ ADMIN_SETTINGS_SECTION_ID = "declarative_settings"
 
 _FIELD_TYPE_BY_KIND = {
     "int": SettingsFieldType.NUMBER,
-    "bool": SettingsFieldType.CHECKBOX,
+    # NOT checkbox: an unchecked declarative checkbox saves JSON false,
+    # which app_api stores as the empty string (verified live), and an
+    # empty value means "keep the environment value" in the precedence
+    # design, so an admin could never turn a knob off. A Yes/No radio
+    # submits the strings "1"/"0", which store verbatim and parse through
+    # the strict bool tokens (verified live against oc_appconfig_ex).
+    "bool": SettingsFieldType.RADIO,
     "str": SettingsFieldType.TEXT,
 }
+
+_BOOL_FIELD_OPTIONS = {"Yes": "1", "No": "0"}
+
+
+def _field_default(knob: AdminConfigKnob) -> bool | int | str:
+    """The form fallback for a knob: the built-in default, with boolean
+    knobs expressed as their radio value ("1"/"0")."""
+    value: bool | int | str = getattr(Settings(), knob.attribute)
+    if knob.kind == "bool":
+        return "1" if value else "0"
+    return value
 
 
 def admin_settings_form() -> SettingsForm:
@@ -60,6 +85,17 @@ def admin_settings_form() -> SettingsForm:
     Field defaults show the BUILT-IN defaults: an environment override
     stays in force until an admin saves a value here, and the form cannot
     see the container environment."""
+    fields = [
+        SettingsField(
+            id=knob.key,
+            title=knob.label,
+            description=knob.description,
+            type=_FIELD_TYPE_BY_KIND[knob.kind],
+            default=_field_default(knob),
+            options=_BOOL_FIELD_OPTIONS if knob.kind == "bool" else {},
+        )
+        for knob in ADMIN_CONFIG_KNOBS
+    ]
     return SettingsForm(
         id=ADMIN_SETTINGS_FORM_ID,
         section_type="admin",
@@ -73,16 +109,7 @@ def admin_settings_form() -> SettingsForm:
             "are the built-in defaults, not the current environment "
             "overrides."
         ),
-        fields=[
-            SettingsField(
-                id=knob.key,
-                title=knob.label,
-                description=knob.description,
-                type=_FIELD_TYPE_BY_KIND[knob.kind],
-                default=getattr(Settings(), knob.attribute),
-            )
-            for knob in ADMIN_CONFIG_KNOBS
-        ],
+        fields=fields,
     )
 
 

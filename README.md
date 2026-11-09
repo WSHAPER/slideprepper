@@ -62,6 +62,8 @@ Precedence, highest first: **admin value** (declarative form or occ) > **environ
 
 Refresh semantics: the worker reads the admin values once per claimed task behind a 30-second cache (`ADMIN_CONFIG_REFRESH_TTL_S`). A change saved at time T applies to tasks claimed from T+30 s at the latest; a task already running keeps the settings it started with.
 
+Two Nextcloud declarative-settings quirks shape the form (both verified live against Nextcloud 35 + AppAPI 35 and pinned by tests): the settings UI submits the form id with the app prefix stripped, so the form is registered as `operational_settings` (an id containing `marp_slides_` would make every UI save a silent no-op, returned as success but stored nowhere); and boolean knobs render as Yes/No radios rather than checkboxes, because an unchecked checkbox saves JSON false, which AppAPI stores as an empty string, and an empty value means "keep the environment value" here. Saving through occ stores any of the accepted spellings directly.
+
 | Knob (admin key = env var) | Built-in default | Applies to |
 | --- | --- | --- |
 | `SLIDEPREPPER_TOTAL_LLM_TIMEOUT` | 1800 s | total time budget of both inner LLM attempts |
