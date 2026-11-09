@@ -45,6 +45,36 @@ Then ask for a deck from the Assistant or any chat tool that schedules TaskProce
 
 Editing a generated deck in place needs an office integration. Where Collabora's viewer app is present, the pptx opens and edits there; git-based Nextcloud 35 no longer ships that app, so office files do not open in-app until the platform's viewer migration lands on the Nextcloud 36 line. Pinning the viewer app at v35.0.2 restores it in the meantime (nextcloud/richdocuments#6218). The deck itself is unaffected: the download opens and edits in PowerPoint, OnlyOffice or desktop LibreOffice, and the html and pdf outputs need no office integration at all.
 
+## Configuration
+
+The operational knobs are admin-manageable at runtime. AppAPI renders them as a declarative settings form (Settings -> Administration -> ExApps Settings -> "Marp Slides"); a saved value is stored server-side and read by the ExApp per claimed task. The same keys are settable with occ:
+
+```bash
+# create (first time) or update (add --update-only) a server-side value
+occ app_api:app:config:set marp_slides MARP_SLIDES_MAX_SLIDES --value 40
+occ app_api:app:config:set marp_slides MARP_SLIDES_MAX_SLIDES --value 30 --update-only
+occ app_api:app:config:delete marp_slides MARP_SLIDES_MAX_SLIDES   # back to env/default
+```
+
+Precedence, highest first: **admin value** (declarative form or occ) > **environment variable** (deploy-time) > **built-in default**. The environment stays a fully working fallback: until an admin saves a value, behavior is exactly the env-driven behavior. An empty admin field means unset, and an invalid admin value fails soft to the env value (the ExApp log carries a warning naming the knob and the bad value). The form displays the built-in defaults as placeholders; it cannot see the container environment, so an env override still in force may differ from what the form shows.
+
+Refresh semantics: the worker reads the admin values once per claimed task behind a 30-second cache (`ADMIN_CONFIG_REFRESH_TTL_S`). A change saved at time T applies to tasks claimed from T+30 s at the latest; a task already running keeps the settings it started with.
+
+| Knob (admin key = env var) | Built-in default | Applies to |
+| --- | --- | --- |
+| `MARP_SLIDES_TOTAL_LLM_TIMEOUT` | 1800 s | total time budget of both inner LLM attempts |
+| `MARP_SLIDES_MAX_SLIDES` | 60 | upper slide bound per deck (per-task requests can only lower it) |
+| `MARP_SLIDES_MAX_PROMPT_CHARS` | 8192 | prompts longer than this are rejected before any LLM round |
+| `MARP_SLIDES_DRAFTS_FOLDER` | empty | Files folder receiving draft .md copies (empty keeps drafts on the ExApp volume) |
+| `MARP_SLIDES_RETRY_LLM` | true | one self-correcting retry of failed LLM rounds |
+| `MARP_SLIDES_OVERFLOW_CHECK` | true | per-slide overflow measurement and deck-level gate |
+| `MARP_SLIDES_LOG_EXCERPT` | true | 240-char deck-failure markdown excerpt in the log |
+| `MARP_SLIDES_DRAFTS_ENABLED` | true | keep draft checkpoints for resumable generation |
+
+Not admin-manageable (environment only, when relevant): `APP_SECRET`, `APP_ID`, `APP_PORT`, `APP_HOST` and `NEXTCLOUD_URL` (AppAPI wiring and bind surface, read by nc_py_api itself), `MARP_SLIDES_MARP_BIN` and `MARP_SLIDES_POLL_INTERVAL` (container- and daemon-coupled), and the internal per-round caps `MARP_SLIDES_LLM_TIMEOUT`, `MARP_SLIDES_MARP_TIMEOUT` and `MARP_SLIDES_MAX_DECK_BYTES` (their admin-facing tuning axes are the surfaced total cap and slide count). The rule: a knob is surfaced when an instance admin plausibly tunes it at runtime; secrets, infra-coupled values and pipeline internals stay with the deployment. There is no LLM API key or endpoint to configure: the app schedules the instance's own `core:text2text` provider.
+
+Auditing: changes made with occ are centrally audit-logged by the admin_audit app whenever it is enabled (it records every console command with its arguments). Form saves are not covered by admin_audit; they appear in `nextcloud.log` as standard request lines (user and URL, no payload).
+
 ## Task contract
 
 The task type takes a required text `prompt`, an optional `output_format` enum (`pptx` default, `html`, `pdf`), an optional `theme` enum (`auto` default, or one of the three themes bundled with Marp: `default`, `gaia`, `uncover`), and an optional `images` list of Nextcloud file ids the server access-checks for the requesting user. It returns the generated deck as a file plus the retained Marp Markdown source. The canonical shape lives in `marp_slides/task_definition.py`.
@@ -92,7 +122,7 @@ flowchart TD
 ```
 
 - The worker is a background thread polling `next_task` every 5 s, woken immediately by AppAPI `/trigger` events. Chromium is involved in exactly one path: only `output_format=pdf` renders through the bundled browser; the syntax gate, the PPTX build and the HTML render are browserless.
-- When the inner LLM output fails extraction or validation, one self-correcting retry is scheduled with the validation error appended as feedback; gate, build and prompt failures are never retried. Progress reports at four phases (5% author, 50% validate, 80% build, 100% done) and both attempts share one total-time cap (`MARP_SLIDES_TOTAL_LLM_TIMEOUT`, default 480 s).
+- When the inner LLM output fails extraction or validation, one self-correcting retry is scheduled with the validation error appended as feedback; gate, build and prompt failures are never retried. Progress reports at four phases (5% author, 50% validate, 80% build, 100% done) and both attempts share one total-time cap (`MARP_SLIDES_TOTAL_LLM_TIMEOUT`, default 1800 s, admin-adjustable; see Configuration).
 - Visual parity with a browser render is not a goal; nativeness and editability are.
 - Every failure path ends in `report_result` with an actionable `user_facing_error_message`: invalid Markdown errors embed the parser output, inner LLM failures surface the nested task's error text, image-cap violations name the file id, the cap and the remedy.
 

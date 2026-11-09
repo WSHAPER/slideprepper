@@ -19,29 +19,59 @@
 		</docker-install>
 		<environment-variables>
 			<variable>
-				<name>MARP_SLIDES_POLL_INTERVAL</name>
-				<display-name>Task poll interval (seconds)</display-name>
-				<description>How often the ExApp polls Nextcloud for new slide deck tasks when no trigger event has arrived. Default: 5.</description>
-			</variable>
-			<variable>
-				<name>MARP_SLIDES_MARP_TIMEOUT</name>
-				<display-name>Marp conversion timeout (seconds)</display-name>
-				<description>Timeout for each marp-cli conversion subprocess (HTML validation and PPTX rendering each). Default: 120.</description>
-			</variable>
-			<variable>
-				<name>MARP_SLIDES_LLM_TIMEOUT</name>
-				<display-name>Inner LLM task timeout (seconds)</display-name>
-				<description>Maximum time to wait for the nested core:text2text task that authors the deck Markdown. Default: 300.</description>
-			</variable>
-			<variable>
 				<name>MARP_SLIDES_TOTAL_LLM_TIMEOUT</name>
 				<display-name>Total inner LLM time cap (seconds)</display-name>
-				<description>Total time budget across BOTH inner LLM attempts (the first plus the self-correcting retry). Default: 1800.</description>
+				<description>Optional. Environment fallback for the admin setting of the same name (Administration settings, ExApps Settings): a value an admin saves there overrides this one and applies to new tasks within 30 seconds. Total time budget across BOTH inner LLM attempts (the first plus the self-correcting retry). Default: 1800.</description>
+			</variable>
+			<variable>
+				<name>MARP_SLIDES_MAX_SLIDES</name>
+				<display-name>Maximum slides per deck</display-name>
+				<description>Optional. Environment fallback for the admin setting of the same name (Administration settings, ExApps Settings). Upper bound of slides the model may author for one deck; per-task requests can only lower it. Default: 60.</description>
+			</variable>
+			<variable>
+				<name>MARP_SLIDES_MAX_PROMPT_CHARS</name>
+				<display-name>Maximum user prompt length (characters)</display-name>
+				<description>Optional. Environment fallback for the admin setting of the same name (Administration settings, ExApps Settings). Prompts longer than this are rejected before any LLM round. Default: 8192.</description>
+			</variable>
+			<variable>
+				<name>MARP_SLIDES_DRAFTS_FOLDER</name>
+				<display-name>Files folder for draft checkpoints</display-name>
+				<description>Optional. Environment fallback for the admin setting of the same name (Administration settings, ExApps Settings). When set, failed and resumed decks also copy their current draft markdown into this folder of the requesting user's Files. Empty keeps drafts on the ExApp volume only. Default: empty.</description>
+			</variable>
+			<variable>
+				<name>MARP_SLIDES_RETRY_LLM</name>
+				<display-name>Retry failed LLM rounds once</display-name>
+				<description>Optional. Environment fallback for the admin setting of the same name (Administration settings, ExApps Settings). One self-correcting retry when the deck fails extraction or strict validation; disable to fail at the first attempt. Default: true.</description>
+			</variable>
+			<variable>
+				<name>MARP_SLIDES_OVERFLOW_CHECK</name>
+				<display-name>Slide overflow checks</display-name>
+				<description>Optional. Environment fallback for the admin setting of the same name (Administration settings, ExApps Settings). Measure every authored slide against its theme box and retry or shrink overflowing slides. Disable only when the headless renderer is unavailable on this instance. Default: true.</description>
 			</variable>
 			<variable>
 				<name>MARP_SLIDES_LOG_EXCERPT</name>
 				<display-name>Log deck-failure markdown excerpts</display-name>
-				<description>When a generated deck fails validation, log a 240-character excerpt of the extracted markdown (WARNING, deck content only) for diagnosability. Set to false to suppress the excerpt in privacy-sensitive deployments; the error line itself is always logged. Default: true.</description>
+				<description>Optional. Environment fallback for the admin setting of the same name (Administration settings, ExApps Settings). When a generated deck fails validation, log a 240-character excerpt of the extracted markdown (WARNING, deck content only) for diagnosability. Set to false to suppress the excerpt in privacy-sensitive deployments; the error line itself is always logged. Default: true.</description>
+			</variable>
+			<variable>
+				<name>MARP_SLIDES_DRAFTS_ENABLED</name>
+				<display-name>Keep draft checkpoints</display-name>
+				<description>Optional. Environment fallback for the admin setting of the same name (Administration settings, ExApps Settings). Failed attempts keep their completed slides as a checkpoint so a follow-up task can resume; disable to always regenerate from scratch. Default: true.</description>
+			</variable>
+			<variable>
+				<name>MARP_SLIDES_POLL_INTERVAL</name>
+				<display-name>Task poll interval (seconds)</display-name>
+				<description>Optional. How often the ExApp polls Nextcloud for new slide deck tasks when no trigger event has arrived. Not admin-manageable (worker loop cadence). Default: 5.</description>
+			</variable>
+			<variable>
+				<name>MARP_SLIDES_MARP_TIMEOUT</name>
+				<display-name>Marp conversion timeout (seconds)</display-name>
+				<description>Optional. Timeout for each marp-cli conversion subprocess (HTML validation and PPTX rendering each). Internal per-round cap tied to the container runtime; not admin-manageable. Default: 120.</description>
+			</variable>
+			<variable>
+				<name>MARP_SLIDES_LLM_TIMEOUT</name>
+				<display-name>Inner LLM task timeout (seconds)</display-name>
+				<description>Optional. Maximum time to wait for one nested core:text2text round. Internal per-round cap; the admin-facing knob is the total cap, so this one is not admin-manageable. Default: 300.</description>
 			</variable>
 		</environment-variables>
 	</external-app>

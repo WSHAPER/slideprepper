@@ -413,3 +413,46 @@ def test_enabled_handler_registers_providers_and_the_admin_form() -> None:
         # disablement stops the worker thread: undo the global state the
         # handler touched so other tests see the module as imported
         THREAD_STOP_EVENT.clear()
+
+
+# --- deployment manifest documentation --------------------------------------
+
+
+def test_info_xml_documents_the_knob_set_and_its_labels() -> None:
+    """info.xml stays accurate now that env is the fallback: every
+    surfaced knob is declared as an env variable (AppAPI only passes
+    declared names into the container), its display-name matches the
+    admin form label verbatim, and its description states the fallback
+    and the admin precedence."""
+    import xml.etree.ElementTree as ET
+    from pathlib import Path
+
+    tree = ET.parse(Path(__file__).resolve().parent.parent / "appinfo" / "info.xml")
+    variables = tree.getroot().find("external-app").find("environment-variables")
+    declared = {
+        v.findtext("name"): (v.findtext("display-name"), v.findtext("description"))
+        for v in variables.findall("variable")
+    }
+    assert set(ADMIN_CONFIG_KEYS) <= set(declared)
+    knobs = {knob.key: knob for knob in ADMIN_CONFIG_KNOBS}
+    for key, knob in knobs.items():
+        display_name, description = declared[key]
+        assert display_name == knob.label, key
+        assert description.startswith("Optional. Environment fallback"), key
+        assert "ExApps Settings" in description, key
+    # the env-only MARP knobs stay documented as non-admin-manageable
+    for env_only in (
+        "MARP_SLIDES_POLL_INTERVAL",
+        "MARP_SLIDES_MARP_TIMEOUT",
+        "MARP_SLIDES_LLM_TIMEOUT",
+    ):
+        assert env_only in declared
+        assert "not admin-manageable" in declared[env_only][1].lower(), env_only
+    # no undeclared strays: every declared MARP_SLIDES_ variable is
+    # classified exactly once (surfaced or documented env-only)
+    declared_marp = {name for name in declared if name.startswith("MARP_SLIDES_")}
+    assert declared_marp == set(ADMIN_CONFIG_KEYS) | {
+        "MARP_SLIDES_POLL_INTERVAL",
+        "MARP_SLIDES_MARP_TIMEOUT",
+        "MARP_SLIDES_LLM_TIMEOUT",
+    }
