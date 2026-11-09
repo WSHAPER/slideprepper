@@ -323,3 +323,93 @@ def test_cache_recovers_after_a_failed_read() -> None:
     appconfig.error = None
     clock.now = 30.1
     assert cache.settings_for(nc).max_slides == 2
+
+
+# --- declarative admin form (the AppAPI admin surface) ----------------------
+
+
+def test_admin_form_covers_exactly_the_knob_set() -> None:
+    """The form's field ids ARE the oc_appconfig_ex keys the worker reads
+    (the declarative save stores by field id), in spec order, with the
+    built-in defaults as the UI fallback."""
+    from marp_slides.controller import admin_settings_form
+
+    form = admin_settings_form()
+    assert form.id == "marp_slides_settings"
+    assert form.section_type == "admin"
+    assert form.section_id == "declarative_settings"
+    assert form.title == "Marp Slides"
+    assert f"within {ADMIN_CONFIG_REFRESH_TTL_S:.0f} seconds" in form.description
+    assert "environment variable of the same name" in form.description
+    assert [f.id for f in form.fields] == list(ADMIN_CONFIG_KEYS)
+
+
+def test_admin_form_field_types_and_defaults_match_the_knobs() -> None:
+    from nc_py_api.ex_app.ui.settings import SettingsFieldType
+
+    from marp_slides.controller import admin_settings_form
+
+    defaults = Settings()  # built-in defaults, the single source
+    form = admin_settings_form()
+    for field, knob in zip(form.fields, ADMIN_CONFIG_KNOBS, strict=True):
+        assert field.title == knob.label
+        assert field.description == knob.description
+        expected_type = {"int": "number", "bool": "checkbox", "str": "text"}[knob.kind]
+        assert field.type == SettingsFieldType(expected_type)
+        assert field.default == getattr(defaults, knob.attribute)
+
+
+def test_admin_form_field_ids_never_include_env_only_variables() -> None:
+    from marp_slides.controller import admin_settings_form
+
+    field_ids = [f.id for f in admin_settings_form().fields]
+    assert not set(field_ids) & set(ENV_ONLY_CONFIG_KEYS)
+
+
+def test_enabled_handler_registers_providers_and_the_admin_form() -> None:
+    """Enablement registers the task providers AND the declarative
+    settings form (the canonical AppAPI pattern: the form rides the
+    enabled event; re-registration is idempotent); disablement removes
+    the providers but never the admin-set config values."""
+    from marp_slides.controller import ADMIN_SETTINGS_FORM_ID, enabled_handler
+    from marp_slides.task_worker import THREAD_STOP_EVENT
+
+    class _FakeTaskProcessing:
+        def __init__(self) -> None:
+            self.registered: list[tuple[object, object]] = []
+            self.unregistered: list[str] = []
+
+        def register(self, provider, task_type):
+            self.registered.append((provider, task_type))
+
+        def unregister(self, provider_id):
+            self.unregistered.append(provider_id)
+
+    class _FakeSettingsUI:
+        def __init__(self) -> None:
+            self.forms: list[object] = []
+
+        def register_form(self, form):
+            self.forms.append(form)
+
+    task_processing = _FakeTaskProcessing()
+    settings_ui = _FakeSettingsUI()
+    nc = SimpleNamespace(
+        providers=SimpleNamespace(task_processing=task_processing),
+        ui=SimpleNamespace(settings=settings_ui),
+    )
+    try:
+        assert enabled_handler(True, nc) == ""
+        assert len(task_processing.registered) == 2
+        assert len(settings_ui.forms) == 1
+        assert settings_ui.forms[0].id == ADMIN_SETTINGS_FORM_ID
+        assert enabled_handler(False, nc) == ""
+        assert task_processing.unregistered == [
+            "marp_slides-deck_renderer",
+            "marp-slides:re_renderer",
+        ]
+        assert len(settings_ui.forms) == 1  # the form is not unregistered
+    finally:
+        # disablement stops the worker thread: undo the global state the
+        # handler touched so other tests see the module as imported
+        THREAD_STOP_EVENT.clear()
