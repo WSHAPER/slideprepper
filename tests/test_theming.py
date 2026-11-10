@@ -12,6 +12,7 @@ import base64
 import email.message
 import re
 import urllib.request
+from dataclasses import replace as _replace
 
 from marp_slides.theming import (
     _SCRIM_ALPHA_WINDOW,
@@ -138,6 +139,41 @@ def test_css_is_structurally_valid() -> None:
 def test_font_stack_is_inter_first_with_fallbacks() -> None:
     css = generate_theme_css(caps())
     assert '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI"' in css
+
+
+def test_token_font_rides_first_with_bundled_inter_fallback() -> None:
+    """A font_family on the values (the design-tokens overlay is the only
+    setter; no theming capability carries one) rides the stack FIRST with
+    the stock stack, bundled Inter included, as its fallback: a token
+    font the render environment lacks falls through to the SAME bundled
+    Inter every instance-branded deck uses, never to a bare system font."""
+    css = generate_theme_css(_replace(caps(), font_family="IBM Plex Sans"))
+    assert 'font-family: "IBM Plex Sans", "Inter", -apple-system,' in css
+    # the bundled Inter faces still ride along (the fallback IS bundled)
+    assert css.count("@font-face {") == 2
+
+
+def test_token_font_changes_no_geometry() -> None:
+    """The font slot is branding-only: a token font must not introduce a
+    single geometry declaration the instance-branded theme lacks (the
+    density contract; the per-slide overflow gates depend on the metrics
+    staying template-fixed under custom branding)."""
+    base = generate_theme_css(caps())
+    token = generate_theme_css(_replace(caps(), font_family="Wide Display"))
+    for css in (base, token):
+        assert "padding" not in css
+        assert "font-size" not in css
+        assert "line-height" not in css
+    # and the rules are otherwise identical: only the stack line differs
+    base_lines = base.splitlines()
+    token_lines = token.splitlines()
+    assert len(base_lines) == len(token_lines)
+    differing = [
+        (b, t)
+        for b, t in zip(base_lines, token_lines)
+        if b != t and "font-family" not in b
+    ]
+    assert differing == []
 
 
 def test_inter_faces_embedded_as_data_uris() -> None:

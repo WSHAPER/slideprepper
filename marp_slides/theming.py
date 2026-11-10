@@ -26,6 +26,16 @@ resolves identically in every consumer (the browserless gate, the
 overflow measurement's file:// page, the standalone HTML deliverable and
 the Chromium PDF render) with zero outbound fetches.
 
+A design tokens file in the task owner's Files can steer the branding
+(colors and the font family) through these same values: the tokens
+overlay REPLACES the instance-derived fields on :class:`ThemingValues`
+(the org-branding scenario; see :mod:`marp_slides.design_tokens`), and a
+token font rides the stack FIRST with the bundled Inter as its fallback.
+Slide geometry is never part of the overlay: sizes, spacing and padding
+stay template-fixed so the per-slide overflow guarantee survives custom
+branding (the overflow gates measure the actually rendered deck, wide
+token fonts included).
+
 The background image (when the admin set one) rides the SAME data-URI
 posture: the marp conversion pipeline deliberately keeps
 ``--allow-local-files`` off except for materialized deck images, and in
@@ -194,7 +204,11 @@ class ThemingValues:
 
     Every field is a plain string exactly as it appears in the capabilities
     dict (hex colors as ``#RRGGBB``, the background as an absolute URL or
-    ``#RRGGBB`` for plain colors, the slogan as free text).
+    ``#RRGGBB`` for plain colors, the slogan as free text), except
+    ``font_family``: no theming capability carries a font, so it is empty
+    for every instance-derived value and only the design-tokens overlay
+    sets it (a font family name that rides the slide font stack FIRST,
+    with the bundled Inter as the fallback; see :func:`_font_stack`).
     """
 
     color: str
@@ -206,11 +220,14 @@ class ThemingValues:
     slogan: str
     name: str
     cache_buster: str
+    font_family: str = ""
 
     @classmethod
     def from_capabilities(cls, theming: Mapping[str, Any]) -> ThemingValues:
         """Build from the raw ``capabilities["theming"]`` dict; missing
-        keys use THEMING_DEFAULTS."""
+        keys use THEMING_DEFAULTS. ``font_family`` stays empty: the
+        capabilities API carries no font, so the stock Inter-first stack
+        applies and only a design tokens file can steer the font."""
 
         def get(key: str) -> str:
             return str(theming.get(key, THEMING_DEFAULTS.get(key, ""))).strip()
@@ -274,7 +291,7 @@ strong, b {{
 }}
 
 section {{
-    font-family: {FONT_STACK};
+    font-family: {_font_stack(values.font_family)};
     background-color: {values.color};
     color: {values.color_text};
 }}
@@ -397,6 +414,22 @@ def _inter_font_css() -> str:
         )
 
     return "\n".join(face(*spec) for spec in _INTER_FACES)
+
+
+def _font_stack(font_family: str) -> str:
+    """The slide ``font-family`` value: a token font (when the branded
+    values carry one; only the design-tokens overlay sets it) is tried
+    FIRST with the bundled-Inter stack as its fallback, so a token font
+    the render environment does not have installed falls through to the
+    bundled Inter instead of a system font. Fonts resolve BY FAMILY NAME
+    through CSS; no font file is fetched for a token font (the v1
+    limitation, stated in the README). The name arrives schema-validated
+    (no quotes or backslashes, see :mod:`marp_slides.design_tokens`), so
+    it cannot break out of the quoted CSS string it is interpolated
+    into."""
+    if not font_family:
+        return FONT_STACK
+    return f'"{font_family}", {FONT_STACK}'
 
 
 def _background_css(values: ThemingValues, background_data_uri: str | None) -> str:
