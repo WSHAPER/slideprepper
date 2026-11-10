@@ -256,13 +256,15 @@ def test_build_outline_prompt_carries_themes_and_request() -> None:
 
 def test_prompts_teach_the_branded_theme_background_rule() -> None:
     """The nextcloud theme teaching: both live prompts (outline + slide)
-    state that the branded theme carries the instance's own colors and
-    background, so backgroundColor is written ONLY on an explicit user
+    state that the branded theme carries the deck owner's branding (the
+    instance theming, or the owner's design tokens file when one
+    exists), so backgroundColor is written ONLY on an explicit user
     request (an invented color would fight the branding)."""
     sentence = (
-        "The nextcloud theme uses this instance's own branding colors and "
-        "background; write backgroundColor ONLY if the user explicitly asks "
-        "for a specific color."
+        "The nextcloud theme uses the deck owner's branding colors and "
+        "background (the instance theming, or a design tokens file in "
+        "the owner's Files when one exists); write backgroundColor ONLY "
+        "if the user explicitly asks for a specific color."
     )
     assert sentence in OUTLINE_SYSTEM_PROMPT
     assert sentence in SLIDE_SYSTEM_PROMPT

@@ -82,7 +82,7 @@ Auditing: changes made with occ are centrally audit-logged by the admin_audit ap
 
 ## Task contract
 
-The task type takes a required text `prompt`, an optional `output_format` enum (`pptx` default, `html`, `pdf`), an optional `theme` enum (`auto` default, or one of the three themes bundled with Marp: `default`, `gaia`, `uncover`), and an optional `images` list of Nextcloud file ids the server access-checks for the requesting user. It returns the generated deck as a file plus the retained Marp Markdown source. The canonical shape lives in `marp_slides/task_definition.py`.
+The task type takes a required text `prompt`, an optional `output_format` enum (`pptx` default, `html`, `pdf`), an optional `theme` enum (`nextcloud` default — the branded theme; `auto` to let the model pick, or one of the three themes bundled with Marp: `default`, `gaia`, `uncover`), and an optional `images` list of Nextcloud file ids the server access-checks for the requesting user. It returns the generated deck as a file plus the retained Marp Markdown source. The canonical shape lives in `marp_slides/task_definition.py`.
 
 `output_format` is a real ENUM shape with three registered values plus a default of `pptx`, and it is validated again inside the provider. So is `theme`: `auto` lets the model pick the best-fitting theme; any other value is a hard requirement the authoring prompt states and the validator enforces against the deck's frontmatter theme.
 
@@ -143,7 +143,7 @@ The codebase is small enough to read top-down.
 
 ODP is deliberately not offered: neither the native builder nor marp CLI can emit it. If ODF output ever becomes a requirement, the path is PPTX to ODP conversion via Collabora.
 
-The optional `theme` input styles the html and pdf outputs: `auto` (the default) has the model pick the best-fitting of the bundled `default`, `gaia` and `uncover` themes, any other value is a fixed requirement; the pptx build ignores it, since native decks carry no Marp theme. When the effective theme is `nextcloud`, a design tokens file in the owner's Files re-brands it (see [Design tokens](#design-tokens)).
+The optional `theme` input styles the html and pdf outputs: `nextcloud` (the default) is the branded theme — this instance's theming, or the task owner's design tokens file when one exists — while `auto` has the model pick the best-fitting theme and any other value is a fixed requirement; the pptx build ignores the theme, since native decks carry no Marp theme. When the effective theme is `nextcloud`, a design tokens file in the owner's Files re-brands it (see [Design tokens](#design-tokens)).
 
 Every task also uploads the final validated Marp Markdown as `<deckname>.md` next to the deck, so a later turn can refeed the original prompt plus this source for small edits instead of a full recompute.
 

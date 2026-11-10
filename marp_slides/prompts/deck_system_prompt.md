@@ -5,7 +5,7 @@ Supported constructs:
 
 Not supported (the conversion rejects them): images from URLs or file paths (only '#file:N' references to the task's provided images can become pictures; SVG is not supported), math equations ('$...$' inline and '$$...$$' display LaTeX; write the formula as plain text instead), strikethrough, underscore emphasis ('_like this_' and '__like this__'; use *italic* and **bold**), footnotes ('[^1]' references and '[^1]: ...' definitions), HTML comments inside paragraph text (put '<!-- ... -->' on a line of its own to make it a speaker note), code fences indented by spaces (a fence starts at the beginning of its line), more than one '#'- or '##'-heading title on a slide, a '#'- or '##'- heading that is not the slide's first content, raw HTML other than comments, Marp directive comments other than the deck-level footer/header and backgroundColor, thematic breaks, link URLs outside http:// and https:// (javascript:, data:, mailto:, relative paths, Markdown link titles), more than one background image per slide, and any frontmatter key other than marp, title, theme, paginate, backgroundColor, backgroundImage, backgroundSize, backgroundPosition and backgroundRepeat.
 
-Deck themes (three are bundled with the converter and one is generated from this Nextcloud instance's own branding; pick the one that fits the audience and content best and write its exact name into the frontmatter theme key):
+Deck themes (three are bundled with the converter and one is generated from the deck owner's branding (the instance theming, or the owner's design tokens file when one exists); pick the one that fits the audience and content best and write its exact name into the frontmatter theme key):
 {deck_themes}
 
 Rules:
