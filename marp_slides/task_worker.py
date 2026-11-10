@@ -957,6 +957,27 @@ def _measure_deck_reports(
         return None
 
 
+def _notice_dormant_tokens(
+    nc: NextcloudApp, validated: ValidatedDeck, task_id: int, settings: Settings
+) -> None:
+    """One INFO when a tokens file exists but the deck's theme is
+    bundled: tokens ride only the branded theme slot, and an owner who
+    uploaded a file and then picked gaia would otherwise get no feedback
+    at all. The lookup rides the per-task memo (one DAV read per task,
+    absent files included); a nextcloud-themed deck is the file's
+    consumer, not a dormant one."""
+    theme = validated.frontmatter.get("theme")
+    if theme == THEME_NAME:
+        return
+    if _task_design_tokens(nc, task_id, settings.design_tokens_path) is not None:
+        LOGGER.info(
+            "Task %s: a design tokens file exists, but the deck theme is "
+            "%r; design tokens apply to the nextcloud theme only",
+            task_id,
+            theme,
+        )
+
+
 def _fit_deck_for_render(
     nc: NextcloudApp,
     validated: ValidatedDeck,
@@ -974,7 +995,14 @@ def _fit_deck_for_render(
     contract: when the pass cannot produce a fitting, valid deck the
     caller's markdown is returned unchanged and the render gate inside
     :func:`_render_deck_file` decides exactly as before. No-op when
-    ``settings.overflow_check`` is False."""
+    ``settings.overflow_check`` is False.
+
+    A tokens file that exists while the deck's theme is bundled gets one
+    INFO here (via :func:`_notice_dormant_tokens`, the only per-task
+    spot that runs before the renders on both task types): without it,
+    an owner who uploaded a tokens file and then picked gaia gets no
+    feedback at all that the file cannot apply."""
+    _notice_dormant_tokens(nc, validated, task_id, settings)
     if not settings.overflow_check:
         return validated, markdown
     theme = validated.frontmatter.get("theme")

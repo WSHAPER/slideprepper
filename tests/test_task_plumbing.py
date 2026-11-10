@@ -2526,10 +2526,14 @@ def test_tokens_lookup_runs_impersonated_and_without_userid_degrades(
     assert values2 == ThemingValues.from_capabilities({})  # stock fallback
 
 
-def test_bundled_theme_ignores_a_present_tokens_file(monkeypatch, settings) -> None:
+def test_bundled_theme_ignores_a_present_tokens_file(
+    monkeypatch, settings, caplog
+) -> None:
     """Tokens ride only the branded theme slot: a bundled-theme deck
-    never reads the file, so its render call carries no theming payload
-    at all (the exact pre-tokens shape)."""
+    never applies the file (its render call carries no theming payload
+    at all, the exact pre-tokens shape), but the silent no-op is now a
+    visible one: one INFO per task tells the owner why the file did not
+    apply."""
     outline = json.dumps(dict(OUTLINE, theme="default"), indent=2)
     fake, _calls = deck_scheduler(slides=SLIDES_OK, outline_json=outline)
     monkeypatch.setattr(task_worker, "schedule_and_wait", fake)
@@ -2537,15 +2541,22 @@ def test_bundled_theme_ignores_a_present_tokens_file(monkeypatch, settings) -> N
         files=tokens_files(), capabilities={"theming": NC_THEMING_CAPS}
     )
     seen = capture_theming_render(monkeypatch)
-    task_worker.process_task(
-        nc,
-        dict(TASK, input={"prompt": "x", "theme": "default", "output_format": "html"}),
-        settings,
-    )
+    with caplog.at_level("INFO", logger="marp_slides.task_worker"):
+        task_worker.process_task(
+            nc,
+            dict(
+                TASK, input={"prompt": "x", "theme": "default", "output_format": "html"}
+            ),
+            settings,
+        )
     (result,) = api.results
     if result["output"] is not None:
         assert result["output"] == SUCCESS_OUTPUT
     assert seen["theming_values"] is None
+    messages = [r.getMessage() for r in caplog.records]
+    assert any(
+        "design tokens apply to the nextcloud theme only" in m for m in messages
+    ), messages
 
 
 def test_bundled_theme_renders_without_theming_kwargs(monkeypatch, settings) -> None:
