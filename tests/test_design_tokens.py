@@ -21,7 +21,12 @@ from marp_slides.design_tokens import (
     parse_design_tokens,
     read_design_tokens,
 )
-from marp_slides.theming import ThemingValues, generate_theme_css
+from marp_slides.theming import (
+    WCAG_LARGE_TEXT_CONTRAST_FLOOR,
+    ThemingValues,
+    contrast_ratio,
+    generate_theme_css,
+)
 
 #: A full valid v1 file, the shape the README documents.
 FULL_FILE = {
@@ -66,13 +71,99 @@ def test_short_hex_widens_and_case_normalizes() -> None:
 
 
 def test_partial_file_uses_stock_defaults_not_instance_values() -> None:
-    """An absent key keeps the STOCK theming default, never the instance
-    theming: the file replaces instance-derived branding, so a partial
-    file is partial stock branding, not a mix of two sources."""
+    """An absent key never pulls the instance theming in: the file
+    replaces instance-derived branding, so the absent color keeps the
+    stock default, and the absent text color is derived from the
+    effective color (never the instance value, never a blind stock
+    white)."""
     tokens = parse_design_tokens({"color": "#123456"})
     assert tokens.color == "#123456"
-    assert tokens.color_text == "#ffffff"  # the stock default
+    assert tokens.color_text == "#ffffff"  # derived: #123456 is dark
     assert tokens.font_family == ""  # the stock Inter-first stack
+
+
+# --- the absent text color is derived, and bad pairs are visible -------------------
+
+
+@pytest.mark.parametrize(
+    ("color", "expected_text"),
+    [
+        ("#f5f5f5", "#000000"),  # light brand color: dark text, not stock white
+        ("#ffffff", "#000000"),
+        ("#1a1a2e", "#ffffff"),  # dark brand color: white text
+        ("#3a1b5d", "#ffffff"),
+    ],
+)
+def test_absent_color_text_is_derived_from_luminance(
+    color: str, expected_text: str
+) -> None:
+    """{"color": "#f5f5f5"} is the obvious first file a user writes; the
+    stock white pairing would render white on near-white (a deck that
+    passes every gate and ships unreadable), so the absent text color is
+    derived from the color's luminance exactly like the instance theming
+    derives it."""
+    tokens = parse_design_tokens({"color": color})
+    assert tokens.color_text == expected_text
+
+
+def test_absent_color_and_absent_color_text_keep_the_stock_pair() -> None:
+    """Both keys absent: the stock pair, which the derivation reproduces
+    (the stock blue is dark, so the derived text is the stock white)."""
+    tokens = parse_design_tokens({})
+    assert tokens.color == "#00679e"
+    assert tokens.color_text == "#ffffff"
+
+
+def test_explicit_low_contrast_pair_warns_but_is_honored(caplog) -> None:
+    """An explicit pair below the WCAG large-text floor is a deliberate
+    branding choice: honored (fail-soft), but one WARNING names the file
+    and the measured contrast, because no gate catches readability."""
+    blob = json.dumps({"color": "#f5f5f5", "color_text": "#ffffff"}).encode("utf-8")
+    files = _FakeFiles({PATH: blob})
+    with caplog.at_level(logging.WARNING, logger="marp_slides.design_tokens"):
+        tokens = read_design_tokens(_nc(files), PATH)
+    assert tokens is not None
+    assert tokens.color == "#f5f5f5"  # honored, not rejected
+    assert tokens.color_text == "#ffffff"
+    messages = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any(
+        "hard to read" in m and PATH in m and "contrast" in m for m in messages
+    ), messages
+
+
+def test_derived_pairing_always_clears_the_floor() -> None:
+    """The derivation picks whichever of black/white contrasts more, so
+    no absent-color_text file can produce an unreadable pair (the
+    minimum possible contrast of that pick is ~4.5:1, past the 3:1
+    floor): white-on-near-white needs an EXPLICIT color_text."""
+    for color in ("#ffffff", "#f5f5f5", "#c0c0c0", "#808080", "#404040", "#000000"):
+        tokens = parse_design_tokens({"color": color})
+        assert tokens.color_text in ("#000000", "#ffffff")
+        assert contrast_ratio(tokens.color, tokens.color_text) >= (
+            WCAG_LARGE_TEXT_CONTRAST_FLOOR
+        ), color
+
+
+def test_readable_pair_does_not_warn(caplog) -> None:
+    with caplog.at_level(logging.WARNING, logger="marp_slides.design_tokens"):
+        tokens = read_design_tokens(
+            _nc(_FakeFiles({PATH: json.dumps(FULL_FILE).encode("utf-8")})), PATH
+        )
+    assert tokens is not None
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (" #1aF ", "#11aaff"),  # padded, short form, mixed case
+        ("#abc\n", "#aabbcc"),  # trailing newline
+        ("\t#ABCDEF  ", "#abcdef"),
+    ],
+)
+def test_whitespace_padded_colors_normalize(raw: str, expected: str) -> None:
+    tokens = parse_design_tokens({"color": raw})
+    assert tokens.color == expected
 
 
 @pytest.mark.parametrize("name", ["Atkinson Hyperlegible", "Noto Sans", "Boss's New"])

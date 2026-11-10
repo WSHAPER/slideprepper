@@ -146,10 +146,11 @@ _INTER_FACES: tuple[tuple[str, str], ...] = (
 #: that still clears the contrast floor (see _scrim_alpha).
 _SCRIM_ALPHA_WINDOW = (0.55, 0.6, 0.65, 0.7, 0.75)
 
-#: WCAG contrast floor for slide text over the scrim. Slide body text is
-#: 29px (headings larger), comfortably past the 18.66px bold / 24px
-#: "large text" threshold where WCAG accepts 3:1.
-_SCRIM_CONTRAST_FLOOR = 3.0
+#: WCAG contrast floor for slide text. Slide body text is 29px (headings
+#: larger), comfortably past the 18.66px bold / 24px "large text"
+#: threshold where WCAG accepts 3:1. Shared by the scrim solver and the
+#: design-tokens pairing check (see :func:`wcag_text_color`).
+WCAG_LARGE_TEXT_CONTRAST_FLOOR = 3.0
 
 #: WCAG sRGB transfer-function cutoff and the mid-luminance split used
 #: when picking a neutral fallback scrim (see _scrim_alpha).
@@ -632,6 +633,24 @@ def _contrast(a: str, b: str) -> float:
     return (la + 0.05) / (lb + 0.05)
 
 
+def wcag_text_color(background: str) -> str:
+    """Black or white, whichever reads better on ``background`` (the WCAG
+    relative-luminance split at the mid point). This is the derivation
+    Nextcloud's own theming applies when a primary color is set without
+    a text color, and what the design-tokens fallback uses when a tokens
+    file carries ``color`` but not ``color_text``: a light brand color
+    gets dark text instead of the unreadable stock white."""
+    return "#000000" if _luminance(background) >= _MID_LUMINANCE else "#ffffff"
+
+
+def contrast_ratio(a: str, b: str) -> float:
+    """The WCAG contrast ratio between two ``#RRGGBB`` colors, as a
+    public helper: the scrim solver and the design-tokens pairing check
+    share one contrast definition (and one floor,
+    :data:`WCAG_LARGE_TEXT_CONTRAST_FLOOR`)."""
+    return _contrast(a, b)
+
+
 def _blend_hex(fg: str, alpha: float, over: tuple[int, int, int]) -> str:
     """A foreground color at ``alpha`` composited over a solid backdrop,
     as ``#RRGGBB`` (the CSS blend the scrim performs over an image)."""
@@ -658,12 +677,12 @@ def _scrim_alpha(tint: str, text: str) -> tuple[float, str]:
     for alpha in _SCRIM_ALPHA_WINDOW:
         over_white = _contrast(text, _blend_hex(tint, alpha, (255, 255, 255)))
         over_black = _contrast(text, _blend_hex(tint, alpha, (0, 0, 0)))
-        if min(over_white, over_black) >= _SCRIM_CONTRAST_FLOOR:
+        if min(over_white, over_black) >= WCAG_LARGE_TEXT_CONTRAST_FLOOR:
             return alpha, tint
     neutral = "#000000" if _luminance(text) >= _MID_LUMINANCE else "#ffffff"
     for alpha in _SCRIM_ALPHA_WINDOW:
         over_white = _contrast(text, _blend_hex(neutral, alpha, (255, 255, 255)))
         over_black = _contrast(text, _blend_hex(neutral, alpha, (0, 0, 0)))
-        if min(over_white, over_black) >= _SCRIM_CONTRAST_FLOOR:
+        if min(over_white, over_black) >= WCAG_LARGE_TEXT_CONTRAST_FLOOR:
             return alpha, neutral
     return _SCRIM_ALPHA_WINDOW[-1], neutral

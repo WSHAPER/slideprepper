@@ -30,6 +30,13 @@ Fail-soft by contract, because a branding file must never fail a deck:
 - a MALFORMED file (not JSON, not an object, unknown keys, invalid
   values, oversize) is ignored the same way with one WARNING naming the
   file and the precise parse error, and the instance theming applies;
+- an UNREADABLE pair (an explicit ``color_text`` on the brand color
+  below the WCAG large-text floor) keeps the file but logs one WARNING
+  naming the file and the measured contrast: a branding choice is the
+  owner's to make, but a deck that passes every gate and ships hard to
+  read must at least leave a trace. The derived pairing (absent
+  ``color_text``) always clears the floor, because it picks whichever of
+  black/white contrasts more;
 - a DAV read error (no impersonation, unreachable namespace) degrades
   like a missing file: DEBUG, never a task failure.
 
@@ -50,7 +57,13 @@ import re
 from dataclasses import dataclass, replace
 from typing import Any
 
-from .theming import THEMING_DEFAULTS, ThemingValues
+from .theming import (
+    THEMING_DEFAULTS,
+    WCAG_LARGE_TEXT_CONTRAST_FLOOR,
+    ThemingValues,
+    contrast_ratio,
+    wcag_text_color,
+)
 
 LOGGER = logging.getLogger("marp_slides.design_tokens")
 
@@ -102,10 +115,11 @@ class DesignTokensError(ValueError):
 @dataclass(frozen=True)
 class DesignTokens:
     """The validated v1 tokens: the branding values a tokens file
-    contributes. Every field is always set: an absent key in the file
-    falls back to the stock theming default (never the instance
-    theming: the file replaces instance-derived branding, so a partial
-    file is partial STOCK branding, not a mix of two sources)."""
+    contributes. Every field is always set: an absent color keeps the
+    stock theming default and an absent text color is DERIVED from the
+    effective color's luminance (never the instance theming: the file
+    replaces instance-derived branding, so a partial file is partial
+    stock-or-derived branding, not a mix of two sources)."""
 
     color: str
     color_text: str
@@ -144,7 +158,10 @@ def parse_design_tokens(document: object) -> DesignTokens:
     typo names itself), malformed colors, or a font family name that is
     empty, oversize, or carries characters forbidden by the injection
     guard. Colors normalize to the lowercase 6-digit form (the short
-    ``#RGB`` form widens) so the generated CSS carries one shape.
+    ``#RGB`` form widens) so the generated CSS carries one shape. An
+    absent ``color_text`` is derived from the effective color's
+    luminance (:func:`marp_slides.theming.wcag_text_color`), so a light
+    brand color automatically pairs with dark text.
     """
     if not isinstance(document, dict):
         raise DesignTokensError(
@@ -158,11 +175,22 @@ def parse_design_tokens(document: object) -> DesignTokens:
             f"schema accepts exactly {', '.join(TOKEN_KEYS)}"
         )
     color = _parse_color(document.get("color"), "color", THEMING_DEFAULTS["color"])
-    color_text = _parse_color(
-        document.get("color_text"), "color_text", THEMING_DEFAULTS["color-text"]
-    )
+    color_text = _derive_or_parse_color_text(document.get("color_text"), color)
     font_family = _parse_font_family(document.get("font_family"))
     return DesignTokens(color=color, color_text=color_text, font_family=font_family)
+
+
+def _derive_or_parse_color_text(value: object, color: str) -> str:
+    """The paired text color: an EXPLICIT value validates like any other
+    color; an ABSENT value is DERIVED from the luminance of the effective
+    ``color`` (dark text on light backgrounds, white on dark), the same
+    derivation Nextcloud's theming applies when a primary color is set
+    without a text color. The stock white is never paired blindly with a
+    light token color: ``{"color": "#f5f5f5"}`` must not render white on
+    near-white (the deck would pass every gate and ship unreadable)."""
+    if value is None:
+        return wcag_text_color(color)
+    return _parse_color(value, "color_text", THEMING_DEFAULTS["color-text"])
 
 
 def _parse_color(value: object, key: str, default: str) -> str:
@@ -309,7 +337,7 @@ def _tokens_from_bytes(data: bytes, path: str) -> DesignTokens | None:
         )
         return None
     try:
-        return parse_design_tokens(document)
+        tokens = parse_design_tokens(document)
     except DesignTokensError as exc:
         LOGGER.warning(
             "the design tokens file '%s' is ignored (%s); the instance theming applies",
@@ -317,3 +345,27 @@ def _tokens_from_bytes(data: bytes, path: str) -> DesignTokens | None:
             exc,
         )
         return None
+    _warn_unreadable_pair(tokens, path)
+    return tokens
+
+
+def _warn_unreadable_pair(tokens: DesignTokens, path: str) -> None:
+    """WARNING (not a file error) when the effective color pair falls
+    below the WCAG large-text floor: the file is still honored (fail-soft
+    by the module contract; a branding choice is the owner's to make),
+    but such a deck passes every gate and ships hard to read, so the
+    decision must at least be visible in the log. Only an EXPLICIT pair
+    can land here: the derived pairing picks whichever of black/white
+    contrasts more, which never drops below ~4.5:1."""
+    ratio = contrast_ratio(tokens.color, tokens.color_text)
+    if ratio < WCAG_LARGE_TEXT_CONTRAST_FLOOR:
+        LOGGER.warning(
+            "the design tokens file '%s' pairs %s text on %s (contrast "
+            "%.2f:1, the WCAG large-text floor is %.1f:1); the file is "
+            "honored but the deck may be hard to read",
+            path,
+            tokens.color_text,
+            tokens.color,
+            ratio,
+            WCAG_LARGE_TEXT_CONTRAST_FLOOR,
+        )
