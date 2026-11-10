@@ -194,7 +194,8 @@ def test_css_geometry_stays_template_fixed_under_tokens() -> None:
 
 class _FakeFiles:
     """The DAV surface read_design_tokens touches: by_path/download over
-    path-keyed blobs, with failure injection."""
+    path-keyed blobs, with realistic node metadata (``info.content_length``,
+    the size the pre-download cap check reads) and failure injection."""
 
     def __init__(
         self,
@@ -202,11 +203,14 @@ class _FakeFiles:
         *,
         lookup_error: Exception | None = None,
         download_error: Exception | None = None,
+        reported_sizes: dict[str, int] | None = None,
     ) -> None:
         self._blobs = dict(blobs or {})
+        self._reported_sizes = dict(reported_sizes or {})
         self._lookup_error = lookup_error
         self._download_error = download_error
         self.looked_up: list[str] = []
+        self.downloaded: list[str] = []
 
     def by_path(self, path: str):
         self.looked_up.append(path)
@@ -214,9 +218,15 @@ class _FakeFiles:
             raise self._lookup_error
         if path not in self._blobs:
             return None
-        return SimpleNamespace(is_dir=False, file_id=path)
+        size = self._reported_sizes.get(path, len(self._blobs[path]))
+        return SimpleNamespace(
+            is_dir=False,
+            file_id=path,
+            info=SimpleNamespace(content_length=size),
+        )
 
     def download(self, node) -> bytes:
+        self.downloaded.append(node.file_id)
         if self._download_error is not None:
             raise self._download_error
         return self._blobs[node.file_id]
@@ -271,11 +281,53 @@ def test_read_schema_violation_warns_naming_file_and_error(caplog) -> None:
     )
 
 
-def test_read_oversize_file_warns_and_is_ignored(caplog) -> None:
-    files = _FakeFiles({PATH: b"x" * (MAX_TOKENS_BYTES + 1)})
+def test_read_oversize_reported_size_is_refused_before_download(caplog) -> None:
+    """The memory guard: the byte cap is enforced on the size the DAV
+    node REPORTS, before download() buffers anything, because the worker
+    process is shared by every user of the instance. A 2 GiB file at the
+    tokens path must cost one PROPFIND plus one WARNING, not 2 GiB of
+    resident memory."""
+    files = _FakeFiles(
+        {PATH: b"x" * (MAX_TOKENS_BYTES + 1)},
+        reported_sizes={PATH: MAX_TOKENS_BYTES + 1},
+    )
     with caplog.at_level(logging.WARNING, logger="marp_slides.design_tokens"):
         assert read_design_tokens(_nc(files), PATH) is None
-    assert any("byte cap" in r.getMessage() for r in caplog.records)
+    assert files.downloaded == []  # never fetched
+    assert any("the cap is" in r.getMessage() for r in caplog.records)
+
+
+def test_read_oversize_bytes_hit_the_post_download_backstop(caplog) -> None:
+    """A size report that lies (or is absent) still cannot smuggle an
+    oversize file through: the downloaded length check is the backstop."""
+    files = _FakeFiles({PATH: b"x" * (MAX_TOKENS_BYTES + 1)})
+    files._reported_sizes[PATH] = 16  # a lying size report
+    with caplog.at_level(logging.WARNING, logger="marp_slides.design_tokens"):
+        assert read_design_tokens(_nc(files), PATH) is None
+    assert files.downloaded == [PATH]  # the backstop runs after the fetch
+    assert any("the cap is" in r.getMessage() for r in caplog.records)
+
+
+def test_read_file_of_exactly_the_cap_is_accepted() -> None:
+    """The cap is inclusive: a file of exactly MAX_TOKENS_BYTES parses
+    (padding whitespace is legal JSON) and is honored."""
+    body = b'{"color": "#3a1b5d"}'
+    padded = body + b" " * (MAX_TOKENS_BYTES - len(body))
+    assert len(padded) == MAX_TOKENS_BYTES
+    files = _FakeFiles({PATH: padded})
+    tokens = read_design_tokens(_nc(files), PATH)
+    assert tokens is not None
+    assert tokens.color == "#3a1b5d"
+
+
+def test_read_file_one_byte_over_the_cap_is_refused(caplog) -> None:
+    files = _FakeFiles(
+        {PATH: b" " * (MAX_TOKENS_BYTES + 1)},
+        reported_sizes={PATH: MAX_TOKENS_BYTES + 1},
+    )
+    with caplog.at_level(logging.WARNING, logger="marp_slides.design_tokens"):
+        assert read_design_tokens(_nc(files), PATH) is None
+    assert files.downloaded == []
 
 
 def test_read_dav_lookup_error_degrades_to_absent(caplog) -> None:

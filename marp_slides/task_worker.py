@@ -158,7 +158,7 @@ from .deck_pipeline import (
     validate_prompt,
     validate_theme,
 )
-from .design_tokens import read_design_tokens
+from .design_tokens import DesignTokens, read_design_tokens
 from .draft_delivery import deliver_deck_files
 from .draft_store import (
     SLIDE_DONE,
@@ -2021,6 +2021,33 @@ def _re_render_deck(
     return markdown
 
 
+#: The per-task design-tokens memo: ``(task_id, tokens_path)`` -> the
+#: resolved tokens (None = absent or malformed). The seam re-resolves the
+#: branded theme for every slide measurement, the render-time fit pass and
+#: each format render, but the FILE must be read once per task: repeated
+#: DAV GETs would multiply a malformed file's WARNING and an oversize
+#: node's bytes, and a file edited mid-task could make the per-slide gates
+#: measure under one theme while the render applies another. One slot per
+#: task is exact because the worker loop processes tasks sequentially and
+#: :func:`process_task` clears the memo at every task boundary.
+_DESIGN_TOKENS_MEMO: dict[tuple[int, str], DesignTokens | None] = {}
+
+
+def _task_design_tokens(
+    nc: NextcloudApp, task_id: int, tokens_path: str
+) -> DesignTokens | None:
+    """The owner's design tokens, resolved ONCE per task: the first caller
+    pays the DAV read, every later resolution of the same task reuses the
+    result (absent and malformed included), so one task means at most one
+    lookup, one WARNING, and one consistent set of branding values across
+    every gate and render. Never raises (:func:`read_design_tokens` is
+    fail-soft by contract)."""
+    key = (task_id, tokens_path)
+    if key not in _DESIGN_TOKENS_MEMO:
+        _DESIGN_TOKENS_MEMO[key] = read_design_tokens(nc, tokens_path)
+    return _DESIGN_TOKENS_MEMO[key]
+
+
 def _resolve_theming_values(
     nc: NextcloudApp, task_id: int, tokens_path: str = DEFAULT_DESIGN_TOKENS_PATH
 ) -> ThemingValues:
@@ -2037,11 +2064,13 @@ def _resolve_theming_values(
     overlay's token colors and font win, the instance background,
     slogan and name are cleared, and every gate and render of the task
     measures and renders the token-branded theme through this same
-    seam. The read runs under the task's ambient DAV impersonation and
-    is fail-soft by the tokens module's contract (missing file: DEBUG
-    and today's behavior; malformed file: one WARNING naming the file;
-    neither ever fails the task), so the log lines below only fire when
-    the instance theming actually applies."""
+    seam. The file is resolved ONCE per task
+    (:func:`_task_design_tokens`), under the task's ambient DAV
+    impersonation, and is fail-soft by the tokens module's contract
+    (missing file: DEBUG and today's behavior; malformed file: one
+    WARNING naming the file per task; neither ever fails the task), so
+    the log lines below only fire when the instance theming actually
+    applies."""
     try:
         theming = nc.capabilities.get("theming") or {}
     except Exception as exc:  # noqa: BLE001 - a theming issue must never fail a task
@@ -2053,7 +2082,7 @@ def _resolve_theming_values(
         )
         theming = {}
     values = ThemingValues.from_capabilities(theming)
-    tokens = read_design_tokens(nc, tokens_path)
+    tokens = _task_design_tokens(nc, task_id, tokens_path)
     if tokens is not None:
         values = tokens.overlay(values)
         LOGGER.info(
@@ -2559,6 +2588,9 @@ def process_task(nc: NextcloudApp, task: Mapping[str, Any], settings: Settings) 
     task_input = task.get("input") or {}
     re_render = task.get("type") == RE_RENDER_TASK_TYPE_ID
     verb = "re-render" if re_render else "generation"
+    # the per-task design-tokens memo dies with the task boundary: the
+    # next task re-resolves the (possibly different) owner's file fresh
+    _DESIGN_TOKENS_MEMO.clear()
     markdown: str | None = None
     drafts = _DraftSession(enabled=settings.drafts_enabled, task_id=task_id)
     user_id: str | None = None

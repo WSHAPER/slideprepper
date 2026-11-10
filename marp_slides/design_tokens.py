@@ -228,13 +228,16 @@ def read_design_tokens(nc: Any, path: str) -> DesignTokens | None:
     impersonation (or a DAV outage) fails like a missing file: DEBUG,
     instance theming, deck proceeds.
 
-    The read is deliberately UNCACHED: the theming seam re-resolves per
-    measurement (~a dozen lookups per task), which costs milliseconds
-    of DAV against a minutes-long task and buys exact freshness: an
-    owner's file edit applies to the very next measurement, and a
-    deleted file falls back with no TTL window to wait out.
+    The read is STATELESS; the task worker memoises it once per task
+    (see :func:`marp_slides.task_worker._task_design_tokens`), so this
+    function still guards its own memory: the reported size from the
+    ``by_path`` result is checked against the byte cap BEFORE the
+    download, because ``download`` buffers the whole file into worker
+    memory (the post-download length check stays as a backstop for a
+    lying or missing size report), exactly like the deck-image fetch.
     """
-    if not path.strip():
+    normalized = path.strip()
+    if not normalized:
         LOGGER.debug("no design tokens path configured; instance theming applies")
         return None
     files = getattr(nc, "files", None)
@@ -255,6 +258,10 @@ def read_design_tokens(nc: Any, path: str) -> DesignTokens | None:
     if node is None or getattr(node, "is_dir", False):
         LOGGER.debug("no design tokens file at '%s'; instance theming applies", path)
         return None
+    reported = getattr(getattr(node, "info", None), "content_length", None)
+    if isinstance(reported, int) and reported > MAX_TOKENS_BYTES:
+        _warn_oversize(path, reported)
+        return None
     try:
         data = download(node)
     except Exception as exc:  # noqa: BLE001 - a branding file must never fail a task
@@ -268,18 +275,28 @@ def read_design_tokens(nc: Any, path: str) -> DesignTokens | None:
     return _tokens_from_bytes(data, path)
 
 
+def _warn_oversize(path: str, size: int) -> None:
+    """The oversize WARNING (shared by the pre-download size check and the
+    post-download backstop): the file is ignored, the instance theming
+    applies."""
+    LOGGER.warning(
+        "the design tokens file '%s' is %d bytes (the cap is %d) and is "
+        "ignored; the instance theming applies",
+        path,
+        size,
+        MAX_TOKENS_BYTES,
+    )
+
+
 def _tokens_from_bytes(data: bytes, path: str) -> DesignTokens | None:
     """Decode and strictly validate the downloaded tokens bytes; the
     malformed paths (oversize, not UTF-8/JSON, schema violation) each
     log one WARNING naming the file and the precise reason and return
-    None so the caller's fail-soft contract holds."""
+    None so the caller's fail-soft contract holds. The oversize check is
+    the BACKSTOP: the caller already refuses oversize nodes before the
+    download, and this catches a lying or absent size report."""
     if len(data) > MAX_TOKENS_BYTES:
-        LOGGER.warning(
-            "the design tokens file '%s' exceeds the %d-byte cap and is "
-            "ignored; the instance theming applies",
-            path,
-            MAX_TOKENS_BYTES,
-        )
+        _warn_oversize(path, len(data))
         return None
     try:
         document = json.loads(data.decode("utf-8"))

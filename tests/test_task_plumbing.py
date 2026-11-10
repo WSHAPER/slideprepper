@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import re
 from dataclasses import replace
 from pathlib import Path
@@ -164,11 +165,13 @@ class FakeFilesAPI:
             if path and path not in self._by_path:
                 self._by_path[path] = node
         self.downloaded: list[int] = []
+        self.looked_up: list[str] = []
 
     def by_id(self, file_id: int):
         return self._nodes.get(file_id)
 
     def by_path(self, path: str):
+        self.looked_up.append(path)
         return self._by_path.get(path)
 
     def download(self, node) -> bytes:
@@ -2157,12 +2160,13 @@ TOKENS_JSON = json.dumps(
     {"color": "#3a1b5d", "color_text": "#f5f0e8", "font_family": "IBM Plex Sans"}
 ).encode("utf-8")
 TOKENS_PATH = "SlidePrepper/design-tokens.json"
+TOKENS_FILE_ID = 501
 
 
 def tokens_files(path: str = TOKENS_PATH, content: bytes = TOKENS_JSON) -> FakeFilesAPI:
     """The owner's Files with a tokens node at ``path``."""
     return FakeFilesAPI(
-        by_path_nodes={path: SimpleNamespace(is_dir=False, file_id=501)},
+        by_path_nodes={path: SimpleNamespace(is_dir=False, file_id=TOKENS_FILE_ID)},
         blobs={501: content},
     )
 
@@ -2285,7 +2289,9 @@ def test_design_tokens_knob_path_overrides_the_default(monkeypatch, settings) ->
     other = json.dumps({"color": "#111111", "color_text": "#eeeeee"}).encode("utf-8")
     files = FakeFilesAPI(
         by_path_nodes={
-            "Branding/tokens.json": SimpleNamespace(is_dir=False, file_id=501),
+            "Branding/tokens.json": SimpleNamespace(
+                is_dir=False, file_id=TOKENS_FILE_ID
+            ),
             TOKENS_PATH: SimpleNamespace(is_dir=False, file_id=502),
         },
         blobs={501: TOKENS_JSON, 502: other},
@@ -2318,7 +2324,7 @@ def test_re_render_path_inherits_design_tokens(monkeypatch, settings) -> None:
     files = FakeFilesAPI(
         {303: md_node(303, content, "Quarterly-Review.md")},
         {303: content, 501: TOKENS_JSON},
-        {TOKENS_PATH: SimpleNamespace(is_dir=False, file_id=501)},
+        {TOKENS_PATH: SimpleNamespace(is_dir=False, file_id=TOKENS_FILE_ID)},
     )
     nc, api = make_fake_nc(files=files, capabilities={"theming": NC_THEMING_CAPS})
     seen = capture_theming_render(monkeypatch)
@@ -2333,6 +2339,191 @@ def test_re_render_path_inherits_design_tokens(monkeypatch, settings) -> None:
     assert isinstance(values, ThemingValues)
     assert values.color == "#3a1b5d"
     assert values.font_family == "IBM Plex Sans"
+
+
+def test_tokens_resolve_once_per_task(monkeypatch, settings) -> None:
+    """The tokens FILE is read once per task even though the seam
+    re-resolves for every slide measurement, the fit pass and each
+    render: one lookup, one download, and (pinned below) one WARNING
+    for a malformed file. The memo dies at the task boundary, so the
+    next task re-reads fresh."""
+    fake, _calls = nc_deck_scheduler()
+    monkeypatch.setattr(task_worker, "schedule_and_wait", fake)
+    files = tokens_files()
+    nc, api = make_fake_nc(files=files, capabilities={"theming": NC_THEMING_CAPS})
+    seen = capture_theming_render(monkeypatch)
+    task_worker.process_task(
+        nc,
+        dict(
+            TASK, input={"prompt": "x", "theme": "nextcloud", "output_format": "html"}
+        ),
+        settings,
+    )
+    (result,) = api.results
+    if result["output"] is not None:
+        assert result["output"] == SUCCESS_OUTPUT
+    # one by_path lookup and one download for the tokens file, despite
+    # the per-slide gate + fit pass + three format renders all resolving
+    assert files.looked_up.count(TOKENS_PATH) == 1
+    assert files.downloaded.count(TOKENS_FILE_ID) == 1
+    assert isinstance(seen["theming_values"], ThemingValues)
+
+
+def test_tokens_file_read_once_means_exactly_one_warning_across_a_task(
+    monkeypatch, settings, caplog
+) -> None:
+    """The documented 'one WARNING naming the file' holds at TASK scope:
+    a malformed file warns exactly once even though the theming seam
+    resolves per slide measurement, per fit pass and per render."""
+    fake, _calls = nc_deck_scheduler()
+    monkeypatch.setattr(task_worker, "schedule_and_wait", fake)
+    nc, api = make_fake_nc(
+        files=tokens_files(content=b"{not json"),
+        capabilities={"theming": NC_THEMING_CAPS},
+    )
+    monkeypatch.setattr(
+        task_worker,
+        "render_deck_html",
+        lambda md, wd, t, bin, image_blobs=None, theming_values=None: (
+            b"<html>standalone</html>"
+        ),
+    )
+    with caplog.at_level("WARNING", logger="marp_slides.design_tokens"):
+        task_worker.process_task(
+            nc,
+            dict(
+                TASK,
+                input={"prompt": "x", "theme": "nextcloud", "output_format": "html"},
+            ),
+            settings,
+        )
+    (result,) = api.results
+    if result["output"] is not None:
+        assert result["output"] == SUCCESS_OUTPUT
+    warnings = [
+        r
+        for r in caplog.records
+        if r.levelno >= logging.WARNING and "not valid JSON" in r.getMessage()
+    ]
+    assert len(warnings) == 1
+    assert TOKENS_PATH in warnings[0].getMessage()
+
+
+def test_per_slide_gate_measures_the_token_branded_theme(monkeypatch, settings) -> None:
+    """The per-slide fit gate receives the token-OVERLAID values (the
+    gate must measure the theme the deck will render with), not the
+    instance theming the capabilities carry."""
+    fake, _calls = nc_deck_scheduler()
+    monkeypatch.setattr(task_worker, "schedule_and_wait", fake)
+    nc, api = make_fake_nc(
+        files=tokens_files(), capabilities={"theming": NC_THEMING_CAPS}
+    )
+    measured: list[object] = []
+
+    def fake_measure(md, wd, **kwargs):
+        if kwargs.get("theming_values") is not None:
+            measured.append(kwargs["theming_values"])
+
+    monkeypatch.setattr(task_worker, "measure_slide_overflow", fake_measure)
+    monkeypatch.setattr(
+        task_worker,
+        "render_deck_html",
+        lambda md, wd, t, bin, image_blobs=None, theming_values=None: (
+            b"<html>standalone</html>"
+        ),
+    )
+    task_worker.process_task(
+        nc,
+        dict(
+            TASK, input={"prompt": "x", "theme": "nextcloud", "output_format": "html"}
+        ),
+        settings,
+    )
+    (result,) = api.results
+    if result["output"] is not None:
+        assert result["output"] == SUCCESS_OUTPUT
+    assert measured, "the per-slide gate never measured with theming values"
+    for values in measured:
+        assert isinstance(values, ThemingValues)
+        assert values.color == "#3a1b5d"
+        assert values.font_family == "IBM Plex Sans"
+        assert values.background == ""
+
+
+def test_tokens_lookup_runs_impersonated_and_without_userid_degrades(
+    monkeypatch, settings
+) -> None:
+    """The DAV lookup runs under the task's ambient impersonation: the
+    owner is stamped before any by_path, and a task without a userId
+    (nothing stamped; a 401 in production) degrades to the stock theming
+    without failing."""
+    fake, _calls = nc_deck_scheduler()
+    monkeypatch.setattr(task_worker, "schedule_and_wait", fake)
+    files = tokens_files()
+    events: list[tuple[str, str]] = []
+    real_by_path = files.by_path
+    real_set_user: list[str] = []
+
+    def by_path(path: str):
+        events.append(("by_path", path))
+        return real_by_path(path)
+
+    def set_user(user: str) -> None:
+        events.append(("set_user", user))
+        real_set_user.append(user)
+
+    files.by_path = by_path  # type: ignore[method-assign]
+    nc, api = make_fake_nc(files=files, capabilities={"theming": NC_THEMING_CAPS})
+    nc.set_user = set_user  # type: ignore[method-assign]
+    seen = capture_theming_render(monkeypatch)
+    task_worker.process_task(
+        nc,
+        dict(
+            TASK,
+            input={"prompt": "x", "theme": "nextcloud", "output_format": "html"},
+            userId="alice",
+        ),
+        settings,
+    )
+    (result,) = api.results
+    if result["output"] is not None:
+        assert result["output"] == SUCCESS_OUTPUT
+    values = seen["theming_values"]
+    assert isinstance(values, ThemingValues)
+    assert values.color == "#3a1b5d"  # impersonated lookup found the file
+    first_lookup = next(i for i, ev in enumerate(events) if ev[0] == "by_path")
+    assert events[:first_lookup] == [("set_user", "alice")]  # stamped first
+
+    # a task with NO userId: the fake DAV refuses unimpersonated reads
+    # (a 401 in production), and the deck still renders stock-branded
+    fake2, _calls2 = nc_deck_scheduler()
+    monkeypatch.setattr(task_worker, "schedule_and_wait", fake2)
+
+    def guarded_by_path(path: str):
+        if not nc2.impersonated:  # nothing stamped: a 401 in production
+            raise RuntimeError("401 unimpersonated")
+        return real_by_path(path)
+
+    files.by_path = guarded_by_path  # type: ignore[method-assign]
+    files.looked_up.clear()
+    nc2, api2 = make_fake_nc(capabilities={})
+    nc2.files = files
+    task_payload = dict(TASK, input={"prompt": "x", "output_format": "html"})
+    task_payload.pop("userId")
+    seen2: dict[str, object] = {}
+
+    def fake_render2(md, wd, t, bin, image_blobs=None, theming_values=None):
+        seen2["theming_values"] = theming_values
+        return b"<html>standalone</html>"
+
+    monkeypatch.setattr(task_worker, "render_deck_html", fake_render2)
+    task_worker.process_task(nc2, task_payload, settings)
+    (result2,) = api2.results
+    if result2["output"] is not None:
+        assert result2["output"] == SUCCESS_OUTPUT
+    values2 = seen2["theming_values"]
+    assert isinstance(values2, ThemingValues)
+    assert values2 == ThemingValues.from_capabilities({})  # stock fallback
 
 
 def test_bundled_theme_ignores_a_present_tokens_file(monkeypatch, settings) -> None:
