@@ -67,6 +67,12 @@ from .theming import (
 
 LOGGER = logging.getLogger("marp_slides.design_tokens")
 
+#: Knob values that disable token discovery instance-wide (an
+#: organization whose decks must always carry the instance theming has a
+#: lever that does not depend on every user deleting their file).
+#: Case-insensitive.
+DISABLED_TOKENS_PATHS = ("-", "off")
+
 #: The token keys of schema v1, derived from what the theme CSS
 #: parameterizes: the slide background color, its paired text color and
 #: the slide font family. Nothing else is steerable in v1.
@@ -263,10 +269,19 @@ def read_design_tokens(nc: Any, path: str) -> DesignTokens | None:
     download, because ``download`` buffers the whole file into worker
     memory (the post-download length check stays as a backstop for a
     lying or missing size report), exactly like the deck-image fetch.
+
+    A path of ``-`` or ``off`` (case-insensitive, the instance-wide off
+    switch) returns None immediately: no DAV call at all.
     """
     normalized = path.strip()
     if not normalized:
         LOGGER.debug("no design tokens path configured; instance theming applies")
+        return None
+    if normalized.lower() in DISABLED_TOKENS_PATHS:
+        LOGGER.debug(
+            "design tokens discovery is disabled ('%s'); instance theming applies",
+            path,
+        )
         return None
     files = getattr(nc, "files", None)
     by_path = getattr(files, "by_path", None)

@@ -15,12 +15,14 @@ from types import SimpleNamespace
 import pytest
 
 from marp_slides.design_tokens import (
+    DISABLED_TOKENS_PATHS,
     MAX_TOKENS_BYTES,
     TOKEN_KEYS,
     DesignTokensError,
     parse_design_tokens,
     read_design_tokens,
 )
+from marp_slides.settings import Settings
 from marp_slides.theming import (
     WCAG_LARGE_TEXT_CONTRAST_FLOOR,
     ThemingValues,
@@ -446,6 +448,24 @@ def test_read_empty_path_is_a_no_op() -> None:
     files = _FakeFiles({PATH: json.dumps(FULL_FILE).encode("utf-8")})
     assert read_design_tokens(_nc(files), "  ") is None
     assert files.looked_up == []
+
+
+@pytest.mark.parametrize("sentinel", [*DISABLED_TOKENS_PATHS, "OFF", " Off "])
+def test_disabled_sentinels_skip_dav_entirely(sentinel: str) -> None:
+    """The instance-wide off switch: '-' or 'off' (case-insensitive)
+    means discovery disabled, no by_path at all — a lever for
+    organizations whose decks must always carry the instance theming,
+    independent of any user's file."""
+    files = _FakeFiles({PATH: json.dumps(FULL_FILE).encode("utf-8")})
+    assert read_design_tokens(_nc(files), sentinel) is None
+    assert files.looked_up == []
+
+
+def test_disabled_sentinel_reaches_the_read_through_settings() -> None:
+    """The knob's '-'/'off' value travels through Settings verbatim (the
+    str knobs keep admin text as-is) and lands in the read as disabled."""
+    assert Settings(design_tokens_path="-").design_tokens_path == "-"
+    assert read_design_tokens(SimpleNamespace(files=None), "-") is None
 
 
 def test_token_keys_are_exactly_the_v1_schema() -> None:

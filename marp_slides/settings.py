@@ -368,9 +368,11 @@ ADMIN_CONFIG_KNOBS: tuple[AdminConfigKnob, ...] = (
         description=(
             "Path of the design tokens JSON (relative to the requesting "
             "user's Files root) whose colors and font re-brand the "
-            "nextcloud theme for that user's decks; a central repo folder "
+            "nextcloud theme for that user's decks; a folder mounted at "
+            "the same path for every user (for example a group folder) "
             "can be pointed at here. A missing or malformed file falls "
-            "back to the instance theming, never a task failure. "
+            "back to the instance theming, never a task failure. Set to "
+            "'-' or 'off' to disable design tokens instance-wide. "
             "Default: SlidePrepper/design-tokens.json."
         ),
     ),
