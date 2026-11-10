@@ -2314,6 +2314,36 @@ def test_design_tokens_knob_path_overrides_the_default(monkeypatch, settings) ->
     assert values.font_family == "IBM Plex Sans"
 
 
+def test_auto_theme_picking_nextcloud_inherits_design_tokens(
+    monkeypatch, settings
+) -> None:
+    """theme=auto is the model's choice: when the outline picks
+    nextcloud, the assembled deck carries the branded theme and the
+    tokens apply exactly as with an explicit request (the effective
+    theme is what the deck ships, not what the input asked for)."""
+    fake, _calls = nc_deck_scheduler()  # the plan picks theme nextcloud
+    monkeypatch.setattr(task_worker, "schedule_and_wait", fake)
+    nc, api = make_fake_nc(
+        files=tokens_files(), capabilities={"theming": NC_THEMING_CAPS}
+    )
+    seen = capture_theming_render(monkeypatch)
+    task_worker.process_task(
+        nc,
+        dict(TASK, input={"prompt": "x", "theme": "auto", "output_format": "html"}),
+        settings,
+    )
+    (result,) = api.results
+    if result["output"] is not None:
+        assert result["output"] == SUCCESS_OUTPUT
+    values = seen["theming_values"]
+    assert isinstance(values, ThemingValues)
+    assert values.color == "#3a1b5d"
+    assert values.font_family == "IBM Plex Sans"
+    # the assembled deck actually asked for the branded theme (the
+    # retained .md is the second upload)
+    assert b"theme: nextcloud" in api.uploads[1][1][1]
+
+
 def test_re_render_path_inherits_design_tokens(monkeypatch, settings) -> None:
     """The re-render task resolves the branded theme through the same
     seam, so a tokens file present in the owner's Files re-brands the

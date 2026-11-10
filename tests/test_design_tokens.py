@@ -271,15 +271,64 @@ def test_css_reflects_token_values() -> None:
     assert "background-image" not in css
 
 
-def test_css_geometry_stays_template_fixed_under_tokens() -> None:
-    """The tokens may recolor and refont, nothing else: no padding,
-    font-size, line-height, width or height declaration may appear (the
-    per-slide overflow guarantee depends on the template metrics)."""
-    values = parse_design_tokens(dict(FULL_FILE)).overlay(_instance_values())
-    css = generate_theme_css(values)
-    assert "padding" not in css
-    assert "font-size" not in css
-    assert "line-height" not in css
+def test_css_changes_only_branding_lines_not_geometry_rules() -> None:
+    """Tokens recolor and refont, nothing else: diffing the
+    token-branded CSS against the instance-branded one line by line,
+    every differing line must be a branding line (color, rgba tint or
+    font-family). This is the invariance that matters, not the absence
+    of geometry strings: a legitimate future geometry rule may appear in
+    BOTH themes, and this check still holds."""
+    base = generate_theme_css(_instance_values())
+    token = generate_theme_css(
+        parse_design_tokens(dict(FULL_FILE)).overlay(_instance_values())
+    )
+    base_lines, token_lines = base.splitlines(), token.splitlines()
+    assert len(base_lines) == len(token_lines)
+    branding = ("color", "rgba(", "font-family")
+    differing = [
+        (b, t)
+        for b, t in zip(base_lines, token_lines)
+        if b != t and not any(part in b or part in t for part in branding)
+    ]
+    assert differing == [], differing
+    # and something did change (the diff is real, not vacuous)
+    assert any(b != t for b, t in zip(base_lines, token_lines))
+
+
+# --- injection: an accepted hostile name cannot restructure the CSS ---------------
+
+
+def test_hostile_but_accepted_font_name_stays_an_inert_string() -> None:
+    """A name that passes the guard but LOOKS like CSS (comment markers,
+    an @theme directive for another theme) must land as one inert quoted
+    string: it appears exactly once (the font-family line), the theme
+    header stays `@theme nextcloud`, and no `</style` can exist because
+    angle brackets reject at parse time. The name cannot re-declare the
+    theme, open a comment, or break out of the HTML style element."""
+    hostile = "x */ /* @theme gaia */ y"
+    tokens = parse_design_tokens({"font_family": hostile})
+    css = generate_theme_css(tokens.overlay(_instance_values()))
+    assert css.count(f'"{hostile}"') == 1  # exactly once, quoted
+    # marp registers the theme from the HEADER comment: it still
+    # declares OUR theme, and the "@theme gaia" inside the name exists
+    # only within that one quoted string
+    assert css.splitlines()[0] == "/*! @theme nextcloud */"
+    assert css.count("@theme gaia") == 1
+    assert "@theme gaia" in f'"{hostile}"'
+    assert "</style" not in css  # no HTML breakout surface at all
+    # and the structure is untouched: diffing against a benign font name,
+    # only the font-family line differs
+    benign = generate_theme_css(
+        parse_design_tokens({"font_family": "Safe Name"}).overlay(_instance_values())
+    )
+    hostile_lines, benign_lines = css.splitlines(), benign.splitlines()
+    assert len(hostile_lines) == len(benign_lines)
+    differing = [
+        (h, b)
+        for h, b in zip(hostile_lines, benign_lines)
+        if h != b and "font-family" not in h
+    ]
+    assert differing == [], differing
 
 
 # --- discovery: fail-soft DAV read ---------------------------------------------------
