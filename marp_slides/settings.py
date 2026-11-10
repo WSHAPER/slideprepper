@@ -121,6 +121,14 @@ DEFAULT_DRAFTS_MAX_KEPT = 20
 #: task owner's Files (DAV impersonation, fail-soft). Empty disables.
 DEFAULT_DELIVERIES_FOLDER = "SlidePrepper"
 
+#: Owner-relative path of the design tokens file that re-brands the
+#: generated ``nextcloud`` theme (see the README's "Design tokens").
+#: It rides the delivered-files folder convention so the file lives
+#: beside the decks it brands. A missing file is exactly the
+#: instance-theming behavior; deleting (or renaming) the file is the
+#: off switch.
+DEFAULT_DESIGN_TOKENS_PATH = "SlidePrepper/design-tokens.json"
+
 #: How long a read-through of the admin appconfig stays fresh: a value an
 #: admin saves (declarative settings UI or occ) applies to tasks claimed
 #: at least this long after the save, without a restart.
@@ -198,6 +206,7 @@ class Settings:
     drafts_folder: str = DEFAULT_DRAFTS_FOLDER
     drafts_max_kept: int = DEFAULT_DRAFTS_MAX_KEPT
     deliveries_folder: str = DEFAULT_DELIVERIES_FOLDER
+    design_tokens_path: str = DEFAULT_DESIGN_TOKENS_PATH
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
@@ -240,6 +249,8 @@ class Settings:
             ),
             deliveries_folder=env.get("SLIDEPREPPER_DELIVERIES_FOLDER", "").strip()
             or DEFAULT_DELIVERIES_FOLDER,
+            design_tokens_path=env.get("SLIDEPREPPER_DESIGN_TOKENS_PATH", "").strip()
+            or DEFAULT_DESIGN_TOKENS_PATH,
         )
 
 
@@ -347,6 +358,20 @@ ADMIN_CONFIG_KNOBS: tuple[AdminConfigKnob, ...] = (
             "Failed attempts keep their completed slides as a checkpoint "
             "so a follow-up task can resume; disable to always regenerate "
             "from scratch. Default: true."
+        ),
+    ),
+    AdminConfigKnob(
+        key="SLIDEPREPPER_DESIGN_TOKENS_PATH",
+        attribute="design_tokens_path",
+        kind="str",
+        label="Design tokens file path",
+        description=(
+            "Path of the design tokens JSON (relative to the requesting "
+            "user's Files root) whose colors and font re-brand the "
+            "nextcloud theme for that user's decks; a central repo folder "
+            "can be pointed at here. A missing or malformed file falls "
+            "back to the instance theming, never a task failure. "
+            "Default: SlidePrepper/design-tokens.json."
         ),
     ),
 )

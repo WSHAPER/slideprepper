@@ -59,6 +59,11 @@
 				<description>Optional. Environment fallback for the admin setting of the same name (Administration settings, ExApps Settings). Failed attempts keep their completed slides as a checkpoint so a follow-up task can resume; disable to always regenerate from scratch. Default: true.</description>
 			</variable>
 			<variable>
+				<name>SLIDEPREPPER_DESIGN_TOKENS_PATH</name>
+				<display-name>Design tokens file path</display-name>
+				<description>Optional. Environment fallback for the admin setting of the same name (Administration settings, ExApps Settings). Path, relative to the requesting user's Files root, of the design tokens JSON whose colors and font re-brand the nextcloud theme for that user's decks. A missing or malformed file falls back to the instance theming. Default: SlidePrepper/design-tokens.json.</description>
+			</variable>
+			<variable>
 				<name>SLIDEPREPPER_POLL_INTERVAL</name>
 				<display-name>Task poll interval (seconds)</display-name>
 				<description>Optional. How often the ExApp polls Nextcloud for new slide deck tasks when no trigger event has arrived. Not admin-manageable (worker loop cadence). Default: 5.</description>

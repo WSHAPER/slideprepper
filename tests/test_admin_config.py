@@ -15,6 +15,7 @@ from marp_slides.settings import (
     ADMIN_CONFIG_KEYS,
     ADMIN_CONFIG_KNOBS,
     ADMIN_CONFIG_REFRESH_TTL_S,
+    DEFAULT_DESIGN_TOKENS_PATH,
     DEFAULT_DRAFTS_FOLDER,
     DEFAULT_LOG_EXCERPT,
     DEFAULT_MAX_PROMPT_CHARS,
@@ -39,6 +40,7 @@ _ENV_LEVEL = {
     "SLIDEPREPPER_OVERFLOW_CHECK": "false",
     "SLIDEPREPPER_LOG_EXCERPT": "false",
     "SLIDEPREPPER_DRAFTS_ENABLED": "false",
+    "SLIDEPREPPER_DESIGN_TOKENS_PATH": "Env Tokens/tokens.json",
 }
 
 _ADMIN_LEVEL = {
@@ -50,6 +52,7 @@ _ADMIN_LEVEL = {
     "SLIDEPREPPER_OVERFLOW_CHECK": "true",
     "SLIDEPREPPER_LOG_EXCERPT": "true",
     "SLIDEPREPPER_DRAFTS_ENABLED": "true",
+    "SLIDEPREPPER_DESIGN_TOKENS_PATH": "Admin Tokens/tokens.json",
 }
 
 #: The expected effective value per knob per precedence level (attribute
@@ -67,6 +70,11 @@ _EXPECTED = {
     "overflow_check": (DEFAULT_OVERFLOW_CHECK, False, True),
     "log_excerpt": (DEFAULT_LOG_EXCERPT, False, True),
     "drafts_enabled": (True, False, True),
+    "design_tokens_path": (
+        DEFAULT_DESIGN_TOKENS_PATH,
+        "Env Tokens/tokens.json",
+        "Admin Tokens/tokens.json",
+    ),
 }
 
 
@@ -141,7 +149,7 @@ def test_admin_bool_falsy_tokens(token: str) -> None:
 
 
 def test_surfaced_keys_are_exactly_the_operational_knob_set() -> None:
-    """The surfaced set is pinned: the eight operational knobs, nothing
+    """The surfaced set is pinned: the nine operational knobs, nothing
     more. A knob joining or leaving the surface must be a deliberate
     change to this list."""
     assert ADMIN_CONFIG_KEYS == (
@@ -153,6 +161,7 @@ def test_surfaced_keys_are_exactly_the_operational_knob_set() -> None:
         "SLIDEPREPPER_OVERFLOW_CHECK",
         "SLIDEPREPPER_LOG_EXCERPT",
         "SLIDEPREPPER_DRAFTS_ENABLED",
+        "SLIDEPREPPER_DESIGN_TOKENS_PATH",
     )
 
 

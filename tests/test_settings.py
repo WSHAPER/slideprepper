@@ -98,3 +98,15 @@ def test_draft_settings_round_trip(monkeypatch) -> None:
     assert s.drafts_enabled is True
     assert s.drafts_folder == ""
     assert s.drafts_max_kept == 20
+
+
+def test_design_tokens_path_round_trip(monkeypatch) -> None:
+    """The tokens path parses from env like the folder knobs: stripped,
+    with empty falling back to the conventional default (there is no
+    disabled state; deleting the file is the off switch)."""
+    monkeypatch.setenv("SLIDEPREPPER_DESIGN_TOKENS_PATH", "  Branding/tokens.json  ")
+    assert Settings.from_env().design_tokens_path == "Branding/tokens.json"
+    monkeypatch.setenv("SLIDEPREPPER_DESIGN_TOKENS_PATH", "")
+    assert Settings.from_env().design_tokens_path == "SlidePrepper/design-tokens.json"
+    monkeypatch.delenv("SLIDEPREPPER_DESIGN_TOKENS_PATH")
+    assert Settings.from_env().design_tokens_path == "SlidePrepper/design-tokens.json"
