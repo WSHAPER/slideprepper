@@ -74,6 +74,7 @@ Two Nextcloud declarative-settings quirks shape the form (both verified live aga
 | `SLIDEPREPPER_OVERFLOW_CHECK` | true | per-slide overflow measurement and deck-level gate |
 | `SLIDEPREPPER_LOG_EXCERPT` | true | 240-char deck-failure markdown excerpt in the log |
 | `SLIDEPREPPER_DRAFTS_ENABLED` | true | keep draft checkpoints for resumable generation |
+| `SLIDEPREPPER_DESIGN_TOKENS_PATH` | `SlidePrepper/design-tokens.json` | owner-relative path of the design tokens JSON that re-brands the `nextcloud` theme (branded-theme html/pdf decks only; missing file: instance theming; see Design tokens) |
 
 Not admin-manageable (environment only, when relevant): `APP_SECRET`, `APP_ID`, `APP_PORT`, `APP_HOST` and `NEXTCLOUD_URL` (AppAPI wiring and bind surface, read by nc_py_api itself), `SLIDEPREPPER_MARP_BIN` and `SLIDEPREPPER_POLL_INTERVAL` (container- and daemon-coupled), and the internal per-round caps `SLIDEPREPPER_LLM_TIMEOUT`, `SLIDEPREPPER_MARP_TIMEOUT` and `SLIDEPREPPER_MAX_DECK_BYTES` (their admin-facing tuning axes are the surfaced total cap and slide count). The rule: a knob is surfaced when an instance admin plausibly tunes it at runtime; secrets, infra-coupled values and pipeline internals stay with the deployment. There is no LLM API key or endpoint to configure: the app schedules the instance's own `core:text2text` provider.
 
@@ -142,9 +143,30 @@ The codebase is small enough to read top-down.
 
 ODP is deliberately not offered: neither the native builder nor marp CLI can emit it. If ODF output ever becomes a requirement, the path is PPTX to ODP conversion via Collabora.
 
-The optional `theme` input styles the html and pdf outputs: `auto` (the default) has the model pick the best-fitting of the bundled `default`, `gaia` and `uncover` themes, any other value is a fixed requirement; the pptx build ignores it, since native decks carry no Marp theme.
+The optional `theme` input styles the html and pdf outputs: `auto` (the default) has the model pick the best-fitting of the bundled `default`, `gaia` and `uncover` themes, any other value is a fixed requirement; the pptx build ignores it, since native decks carry no Marp theme. When the effective theme is `nextcloud`, a design tokens file in the owner's Files re-brands it (see [Design tokens](#design-tokens)).
 
 Every task also uploads the final validated Marp Markdown as `<deckname>.md` next to the deck, so a later turn can refeed the original prompt plus this source for small edits instead of a full recompute.
+
+## Design tokens
+
+A user (or an organization) can re-brand the `nextcloud` theme for their own decks without touching the instance theming: a small JSON file in the **task owner's Files**, at `SlidePrepper/design-tokens.json` by default (the knob `SLIDEPREPPER_DESIGN_TOKENS_PATH`, relative to the owner's Files root, can point at a central repo folder instead). The v1 schema is deliberately shallow — two colors and one font family, exactly the branding the generated theme CSS parameterizes:
+
+```json
+{
+  "color": "#3a1b5d",
+  "color_text": "#f5f0e8",
+  "font_family": "IBM Plex Sans"
+}
+```
+
+- Every key is optional; an absent key uses the app's stock default (Nextcloud blue / white / the bundled Inter), never the instance theming: the file *replaces* instance-derived branding, including the instance background image, slogan and name, which are cleared rather than mixed in.
+- Colors are `#RRGGBB` (or `#RGB`) strings; `font_family` is a font family *name* (letters, digits, spaces and common name punctuation; quotes, backslashes and angle brackets are rejected at parse time, so a tokens file can smuggle neither CSS nor HTML).
+- Unknown keys are a file error: strict validation means a typo'd key cannot silently do nothing.
+- When the file exists and parses, its values apply **instead of** the server's theming capabilities whenever the effective theme is `nextcloud` (picked explicitly or via `auto`), on every surface that resolves that theme: the generation task, the chat tool's schedule of it, and the re-render task. The theme is still produced by the same generator with the same scrim/contrast handling; only the branding values differ.
+- **Fail-soft by contract**: a missing file is exactly the instance-theming behavior plus one debug log line; a malformed file (not JSON, unknown keys, invalid values, over 64 KiB) is ignored the same way with one warning naming the file and the reason. Neither ever fails a task. Deleting the file is the off switch; there is no propagation delay.
+- The **font resolves by family name** through CSS with the bundled Inter as the fallback: no font file is fetched in v1, so a font the render environment does not have installed silently falls through to Inter (install the font on the machines that render/view, or keep to widely available families).
+- **Geometry is never steerable**: tokens change colors and the font family only; sizes, spacing and padding stay fixed in the template, so the overflow guarantee survives custom branding. A wide token font can still change text metrics — that is fine, because the per-slide overflow gates measure the *actually rendered* deck: a token font that overflows fails loudly at the gate exactly like an over-packed prompt would.
+- The **pptx output ignores the theme** by design (python-pptx has no theme surface), so tokens affect html and pdf decks only.
 
 ## Security
 
