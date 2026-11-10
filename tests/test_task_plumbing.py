@@ -2149,6 +2149,214 @@ def test_nextcloud_theme_pptx_logs_that_pptx_ignores_it(
     )
 
 
+# --- design tokens: the owner's branding file re-brands the theme ---------------
+
+
+#: A full v1 tokens file (the README's example), at the conventional path.
+TOKENS_JSON = json.dumps(
+    {"color": "#3a1b5d", "color_text": "#f5f0e8", "font_family": "IBM Plex Sans"}
+).encode("utf-8")
+TOKENS_PATH = "SlidePrepper/design-tokens.json"
+
+
+def tokens_files(path: str = TOKENS_PATH, content: bytes = TOKENS_JSON) -> FakeFilesAPI:
+    """The owner's Files with a tokens node at ``path``."""
+    return FakeFilesAPI(
+        by_path_nodes={path: SimpleNamespace(is_dir=False, file_id=501)},
+        blobs={501: content},
+    )
+
+
+def capture_theming_render(monkeypatch) -> dict[str, object]:
+    """Capture the theming_values the html render receives."""
+    seen: dict[str, object] = {}
+
+    def fake_render(md, wd, t, bin, image_blobs=None, theming_values=None):
+        seen["theming_values"] = theming_values
+        return b"<html>standalone</html>"
+
+    monkeypatch.setattr(task_worker, "render_deck_html", fake_render)
+    return seen
+
+
+def test_tokens_file_rebrands_the_generation_task(
+    monkeypatch, settings, caplog
+) -> None:
+    """A tokens file at the conventional path in the task owner's Files
+    re-brands the generated nextcloud theme: the render receives the
+    token colors and font, the instance's own branding (its background
+    photo included) is cleared, and an INFO line names the file."""
+    fake, _calls = nc_deck_scheduler()
+    monkeypatch.setattr(task_worker, "schedule_and_wait", fake)
+    nc, api = make_fake_nc(
+        files=tokens_files(), capabilities={"theming": NC_THEMING_CAPS}
+    )
+    seen = capture_theming_render(monkeypatch)
+    with caplog.at_level("INFO", logger="marp_slides.task_worker"):
+        task_worker.process_task(
+            nc,
+            dict(
+                TASK,
+                input={"prompt": "x", "theme": "nextcloud", "output_format": "html"},
+            ),
+            settings,
+        )
+    (result,) = api.results
+    if result["output"] is not None:
+        assert result["output"] == SUCCESS_OUTPUT
+    values = seen["theming_values"]
+    assert isinstance(values, ThemingValues)
+    assert values.color == "#3a1b5d"
+    assert values.color_text == "#f5f0e8"
+    assert values.font_family == "IBM Plex Sans"
+    assert values.background == ""  # the instance photo did not survive
+    assert any(
+        "design tokens file" in r.getMessage() and TOKENS_PATH in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_missing_tokens_file_is_exactly_instance_theming(
+    monkeypatch, settings, caplog
+) -> None:
+    """No tokens node (the default deployment): the values are exactly
+    what the capabilities produce, so a deck without tokens renders
+    byte-comparably to the pre-tokens behavior."""
+    fake, _calls = nc_deck_scheduler()
+    monkeypatch.setattr(task_worker, "schedule_and_wait", fake)
+    nc, api = make_fake_nc(
+        files=FakeFilesAPI(), capabilities={"theming": NC_THEMING_CAPS}
+    )
+    seen = capture_theming_render(monkeypatch)
+    with caplog.at_level("DEBUG", logger="marp_slides.design_tokens"):
+        task_worker.process_task(
+            nc,
+            dict(
+                TASK,
+                input={"prompt": "x", "theme": "nextcloud", "output_format": "html"},
+            ),
+            settings,
+        )
+    (result,) = api.results
+    if result["output"] is not None:
+        assert result["output"] == SUCCESS_OUTPUT
+    assert seen["theming_values"] == ThemingValues.from_capabilities(NC_THEMING_CAPS)
+    assert any("no design tokens file" in r.getMessage() for r in caplog.records)
+
+
+def test_malformed_tokens_file_falls_back_to_instance_theming(
+    monkeypatch, settings, caplog
+) -> None:
+    """A corrupt tokens file is one WARNING naming the file, and the
+    deck still renders with the instance theming: a branding file must
+    never fail a task."""
+    fake, _calls = nc_deck_scheduler()
+    monkeypatch.setattr(task_worker, "schedule_and_wait", fake)
+    nc, api = make_fake_nc(
+        files=tokens_files(content=b"{not json"),
+        capabilities={"theming": NC_THEMING_CAPS},
+    )
+    seen = capture_theming_render(monkeypatch)
+    with caplog.at_level("WARNING", logger="marp_slides.design_tokens"):
+        task_worker.process_task(
+            nc,
+            dict(
+                TASK,
+                input={"prompt": "x", "theme": "nextcloud", "output_format": "html"},
+            ),
+            settings,
+        )
+    (result,) = api.results
+    if result["output"] is not None:
+        assert result["output"] == SUCCESS_OUTPUT
+    assert seen["theming_values"] == ThemingValues.from_capabilities(NC_THEMING_CAPS)
+    assert any(
+        "not valid JSON" in r.getMessage() and TOKENS_PATH in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_design_tokens_knob_path_overrides_the_default(monkeypatch, settings) -> None:
+    """The admin knob relocates discovery: with the knob pointed at a
+    central path, a file THERE applies while a file at the conventional
+    default path is ignored (not merged, not preferred)."""
+    fake, _calls = nc_deck_scheduler()
+    monkeypatch.setattr(task_worker, "schedule_and_wait", fake)
+    other = json.dumps({"color": "#111111", "color_text": "#eeeeee"}).encode("utf-8")
+    files = FakeFilesAPI(
+        by_path_nodes={
+            "Branding/tokens.json": SimpleNamespace(is_dir=False, file_id=501),
+            TOKENS_PATH: SimpleNamespace(is_dir=False, file_id=502),
+        },
+        blobs={501: TOKENS_JSON, 502: other},
+    )
+    nc, api = make_fake_nc(files=files, capabilities={"theming": NC_THEMING_CAPS})
+    seen = capture_theming_render(monkeypatch)
+    task_worker.process_task(
+        nc,
+        dict(
+            TASK, input={"prompt": "x", "theme": "nextcloud", "output_format": "html"}
+        ),
+        Settings(design_tokens_path="Branding/tokens.json"),
+    )
+    (result,) = api.results
+    if result["output"] is not None:
+        assert result["output"] == SUCCESS_OUTPUT
+    values = seen["theming_values"]
+    assert isinstance(values, ThemingValues)
+    assert values.color == "#3a1b5d"  # the knob-path file, not the default-path one
+    assert values.font_family == "IBM Plex Sans"
+
+
+def test_re_render_path_inherits_design_tokens(monkeypatch, settings) -> None:
+    """The re-render task resolves the branded theme through the same
+    seam, so a tokens file present in the owner's Files re-brands the
+    rebuilt deck identically: surface inheritance, not a per-task-type
+    feature."""
+    deck = VALID_DECK.replace("theme: default", "theme: nextcloud")
+    content = deck.encode("utf-8")
+    files = FakeFilesAPI(
+        {303: md_node(303, content, "Quarterly-Review.md")},
+        {303: content, 501: TOKENS_JSON},
+        {TOKENS_PATH: SimpleNamespace(is_dir=False, file_id=501)},
+    )
+    nc, api = make_fake_nc(files=files, capabilities={"theming": NC_THEMING_CAPS})
+    seen = capture_theming_render(monkeypatch)
+    task_worker.process_task(
+        nc,
+        re_render_task({"deck_source_file": 303, "output_format": "html"}),
+        settings,
+    )
+    (result,) = api.results
+    assert result["output"] == SUCCESS_OUTPUT
+    values = seen["theming_values"]
+    assert isinstance(values, ThemingValues)
+    assert values.color == "#3a1b5d"
+    assert values.font_family == "IBM Plex Sans"
+
+
+def test_bundled_theme_ignores_a_present_tokens_file(monkeypatch, settings) -> None:
+    """Tokens ride only the branded theme slot: a bundled-theme deck
+    never reads the file, so its render call carries no theming payload
+    at all (the exact pre-tokens shape)."""
+    outline = json.dumps(dict(OUTLINE, theme="default"), indent=2)
+    fake, _calls = deck_scheduler(slides=SLIDES_OK, outline_json=outline)
+    monkeypatch.setattr(task_worker, "schedule_and_wait", fake)
+    nc, api = make_fake_nc(
+        files=tokens_files(), capabilities={"theming": NC_THEMING_CAPS}
+    )
+    seen = capture_theming_render(monkeypatch)
+    task_worker.process_task(
+        nc,
+        dict(TASK, input={"prompt": "x", "theme": "default", "output_format": "html"}),
+        settings,
+    )
+    (result,) = api.results
+    if result["output"] is not None:
+        assert result["output"] == SUCCESS_OUTPUT
+    assert seen["theming_values"] is None
+
+
 def test_bundled_theme_renders_without_theming_kwargs(monkeypatch, settings) -> None:
     """A bundled theme must not carry the branded-theme payload: the
     render kwargs stay exactly as before the nextcloud theme existed,

@@ -158,6 +158,7 @@ from .deck_pipeline import (
     validate_prompt,
     validate_theme,
 )
+from .design_tokens import read_design_tokens
 from .draft_delivery import deliver_deck_files
 from .draft_store import (
     SLIDE_DONE,
@@ -202,6 +203,7 @@ from .settings import (
     ADMIN_CONFIG_KEYS,
     ADMIN_CONFIG_REFRESH_TTL_S,
     APP_ID,
+    DEFAULT_DESIGN_TOKENS_PATH,
     GENERATION_OUTPUT_FORMAT_DEFAULT,
     HTML_MIME_TYPE,
     MARKDOWN_MIME_TYPE,
@@ -486,6 +488,7 @@ def _measure_slide_fit(
     theme: str,
     number: int,
     task_id: int,
+    settings: Settings,
 ) -> SlideOverflow | None:
     """One best-effort fit measurement of a slide candidate (wrapped in a
     minimal frontmatter carrying the deck's theme, so the metrics match
@@ -493,10 +496,13 @@ def _measure_slide_fit(
     Returns the measured report, or None when the measurement
     infrastructure is unavailable (the caller decides whether that is
     fail-open or a missing input for a deterministic step). For the
-    generated ``nextcloud`` theme the resolved instance theming values
+    generated ``nextcloud`` theme the resolved theming values
     ride the call: the theme exists only as CSS written from them (see
-    :func:`_reject_slide_overflow`). This is not an LLM round: it never
-    touches the shared LLM time budget."""
+    :func:`_reject_slide_overflow`), and the resolution honors the
+    task owner's design tokens file (``settings.design_tokens_path``)
+    so a token-branded deck measures against exactly the theme it will
+    render with. This is not an LLM round: it never touches the shared
+    LLM time budget."""
     markdown = f"---\nmarp: true\ntheme: {theme}\n---\n\n{slide_markdown}"
     measure_kwargs: dict[str, ThemingValues] = {}
     if theme == THEME_NAME:
@@ -505,7 +511,11 @@ def _measure_slide_fit(
         # ever escapes, measure WITHOUT the values and let the driver's
         # fail-closed error hit the fail-open handling below
         try:
-            measure_kwargs = {"theming_values": _resolve_theming_values(nc, task_id)}
+            measure_kwargs = {
+                "theming_values": _resolve_theming_values(
+                    nc, task_id, tokens_path=settings.design_tokens_path
+                )
+            }
         except Exception as exc:  # noqa: BLE001 - defensive only, see above
             LOGGER.warning(
                 "Task %s: slide %d theming resolution failed (%s); measuring "
@@ -548,7 +558,7 @@ def _reject_slide_overflow(
     delivery. No-op when ``settings.overflow_check`` is False."""
     if not settings.overflow_check:
         return
-    report = _measure_slide_fit(nc, slide_markdown, theme, number, task_id)
+    report = _measure_slide_fit(nc, slide_markdown, theme, number, task_id, settings)
     if report is None:
         return
     # One line-height grace: sub-line overflow (content within one
@@ -591,7 +601,7 @@ def _shrink_slide_to_fit(
     the original overflow failure stands."""
     if not settings.overflow_check:
         return None
-    report = _measure_slide_fit(nc, slide_markdown, theme, number, task_id)
+    report = _measure_slide_fit(nc, slide_markdown, theme, number, task_id, settings)
     if report is None or report.overflow_y_px <= 0:
         return None
     lines_to_cut = ceil(report.overflow_y_px / max(1, report.line_px))
@@ -660,7 +670,7 @@ def _scale_slide_to_fit(
         # the parser allows at most one block per slide; replacing a
         # foreign one is out of contract, so there is nothing to do
         return None
-    report = _measure_slide_fit(nc, slide_markdown, theme, number, task_id)
+    report = _measure_slide_fit(nc, slide_markdown, theme, number, task_id, settings)
     if report is None or report.overflow_y_px <= 0:
         return None  # fits after all, or unmeasurable: nothing to scale
     # first plausible factor: content height shrinks roughly linearly with
@@ -673,7 +683,7 @@ def _scale_slide_to_fit(
     for factor in factors:
         px = round(report.font_px * factor, 1)
         candidate = f"{slide_markdown.rstrip()}\n\n{_fit_style_block(px)}\n"
-        if _measure_slide_fit(nc, candidate, theme, number, task_id) is None:
+        if _measure_slide_fit(nc, candidate, theme, number, task_id, settings) is None:
             LOGGER.info(
                 "Task %s: slide %d fits at a scaled font of %s px (factor "
                 "%.2f); keeping every word",
@@ -711,7 +721,7 @@ def _strip_overflowing_slide_chrome(
     offender is real content or the slide carries no scoped chrome."""
     if not settings.overflow_check:
         return None
-    report = _measure_slide_fit(nc, slide_markdown, theme, number, task_id)
+    report = _measure_slide_fit(nc, slide_markdown, theme, number, task_id, settings)
     if report is None or report.first_offender is None:
         return None
     tag, _text = report.first_offender
@@ -969,7 +979,9 @@ def _fit_deck_for_render(
         return validated, markdown
     theme = validated.frontmatter.get("theme")
     theming_values = (
-        _resolve_theming_values(nc, task_id) if theme == THEME_NAME else None
+        _resolve_theming_values(nc, task_id, tokens_path=settings.design_tokens_path)
+        if theme == THEME_NAME
+        else None
     )
     reports = _measure_deck_reports(markdown, theming_values, task_id)
     if not reports:
@@ -2009,14 +2021,27 @@ def _re_render_deck(
     return markdown
 
 
-def _resolve_theming_values(nc: NextcloudApp, task_id: int) -> ThemingValues:
-    """Fetch the instance theming values for the generated ``nextcloud``
+def _resolve_theming_values(
+    nc: NextcloudApp, task_id: int, tokens_path: str = DEFAULT_DESIGN_TOKENS_PATH
+) -> ThemingValues:
+    """Fetch the theming values for the generated ``nextcloud``
     theme: the raw ``capabilities["theming"]`` dict (hex color strings
     preserved; an ExApp's app-context request sees the admin-defined
     global values). NEVER raises: a missing or unreadable theming section
     falls back to the module's stock Nextcloud defaults
     (:data:`marp_slides.theming.THEMING_DEFAULTS`) so the deck still
-    renders — a branding mismatch is never worth failing a task over."""
+    renders — a branding mismatch is never worth failing a task over.
+
+    A design tokens file at ``tokens_path`` in the TASK OWNER's Files
+    (the org-branding scenario) REPLACES the instance branding: the
+    overlay's token colors and font win, the instance background,
+    slogan and name are cleared, and every gate and render of the task
+    measures and renders the token-branded theme through this same
+    seam. The read runs under the task's ambient DAV impersonation and
+    is fail-soft by the tokens module's contract (missing file: DEBUG
+    and today's behavior; malformed file: one WARNING naming the file;
+    neither ever fails the task), so the log lines below only fire when
+    the instance theming actually applies."""
     try:
         theming = nc.capabilities.get("theming") or {}
     except Exception as exc:  # noqa: BLE001 - a theming issue must never fail a task
@@ -2028,7 +2053,18 @@ def _resolve_theming_values(nc: NextcloudApp, task_id: int) -> ThemingValues:
         )
         theming = {}
     values = ThemingValues.from_capabilities(theming)
-    if theming:
+    tokens = read_design_tokens(nc, tokens_path)
+    if tokens is not None:
+        values = tokens.overlay(values)
+        LOGGER.info(
+            "Task %s: nextcloud theme uses the design tokens file '%s' "
+            "(color %s, font %r)",
+            task_id,
+            tokens_path,
+            values.color,
+            values.font_family or "Inter",
+        )
+    elif theming:
         LOGGER.info(
             "Task %s: nextcloud theme uses the instance theming (color %s)",
             task_id,
@@ -2073,7 +2109,9 @@ def _render_deck_file(
     deck_theme = validated.frontmatter.get("theme")
     theming_values: ThemingValues | None = None
     if deck_theme == THEME_NAME:
-        theming_values = _resolve_theming_values(nc, task_id)
+        theming_values = _resolve_theming_values(
+            nc, task_id, tokens_path=settings.design_tokens_path
+        )
     # the render-time fit backstop measures the deck AFTER its images
     # materialize (image-inclusive, unlike the per-slide gate) and with
     # the branded theme values a nextcloud deck needs
