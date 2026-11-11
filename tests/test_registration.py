@@ -43,14 +43,23 @@ def test_provider_shape() -> None:
     assert [s.name for s in provider.optional_input_shape] == [
         "output_format",
         "theme",
+        "tokens_file",
+        "custom_theme_file",
         "max_slides",
         "draft_id",
         "draft_file",
         "images",
     ]
-    fmt_slot, theme_slot, _max_slides, _draft, _draft_file, images_slot = (
-        provider.optional_input_shape
-    )
+    (
+        fmt_slot,
+        theme_slot,
+        tokens_file_slot,
+        custom_theme_file_slot,
+        _max_slides,
+        _draft,
+        _draft_file,
+        images_slot,
+    ) = provider.optional_input_shape
     assert fmt_slot.shape_type == ShapeType.ENUM
     enum_values = provider.optional_input_shape_enum_values["output_format"]
     # nc_py_api 0.30.3 ships optional_input_shape_enum_values as a LIST per
@@ -69,6 +78,8 @@ def test_provider_shape() -> None:
         "max_slides": 8,
     }
     assert theme_slot.shape_type == ShapeType.ENUM
+    assert tokens_file_slot.shape_type == ShapeType.FILE
+    assert custom_theme_file_slot.shape_type == ShapeType.FILE
     assert images_slot.shape_type == ShapeType.LIST_OF_FILES
 
 
@@ -98,11 +109,64 @@ def test_theme_slot_enum_mirrors_the_constructs_constant() -> None:
     assert values[0].name.startswith("Automatic")
 
 
+def test_nextcloud_theme_label_names_both_branding_sources() -> None:
+    """The nextcloud dropdown entry is state-aware: it names BOTH
+    branding sources (the owner's tokens file when one is configured,
+    else the instance theming), so an owner who dropped a tokens file
+    understands why their deck is not instance-branded."""
+    from marp_slides.constructs import THEME_NEXTCLOUD
+
+    provider = task_definition.PROVIDER
+    values = provider.optional_input_shape_enum_values["theme"]
+    nextcloud = next(v for v in values if v.value == THEME_NEXTCLOUD)
+    assert nextcloud.name == (
+        "Nextcloud (uses your branding if a tokens file is configured; "
+        "otherwise the instance branding)"
+    )
+    # every other entry keeps its plain capitalized label
+    for value in values:
+        if value.value not in (THEME_NEXTCLOUD, "auto", "custom"):
+            assert value.name == value.value.capitalize()
+
+
+def test_tokens_file_slot_is_optional_file_with_override_teaching() -> None:
+    """The per-deck branding entry: the label teaches the conventional
+    path it overrides and the one-deck scope (the conventional file
+    stays the persistent default)."""
+    provider = task_definition.PROVIDER
+    slot = next(s for s in provider.optional_input_shape if s.name == "tokens_file")
+    assert slot.shape_type == ShapeType.FILE
+    assert slot.description == (
+        "Optional design tokens file (.json). Overrides the conventional "
+        "SlidePrepper/design-tokens.json for this deck only."
+    )
+    # the pickers are a generation-task concern: re-render keeps the
+    # conventional-path resolution only
+    assert "tokens_file" not in [
+        s.name for s in task_definition.RE_RENDER_PROVIDER.optional_input_shape
+    ]
+
+
+def test_custom_theme_file_slot_is_optional_file_with_override_teaching() -> None:
+    """The per-deck theme entry: the same one-deck-override teaching as
+    the tokens picker, naming the conventional theme path."""
+    provider = task_definition.PROVIDER
+    slot = next(
+        s for s in provider.optional_input_shape if s.name == "custom_theme_file"
+    )
+    assert slot.shape_type == ShapeType.FILE
+    assert slot.description == (
+        "Optional custom theme CSS file (.css). Overrides the "
+        "conventional SlidePrepper/custom-theme.css for this deck only."
+    )
+    assert "custom_theme_file" not in [
+        s.name for s in task_definition.RE_RENDER_PROVIDER.optional_input_shape
+    ]
+
+
 def test_theme_description_states_values_and_pptx_limit() -> None:
     provider = task_definition.PROVIDER
-    (_fmt, theme_slot, _ms, _draft, _draft_file, _images) = (
-        provider.optional_input_shape
-    )
+    theme_slot = next(s for s in provider.optional_input_shape if s.name == "theme")
     # the default (nextcloud, the instance branding) is stated, 'auto' and
     # every bundled theme remain named, and the pptx limitation stays
     assert "'auto'" in theme_slot.description
@@ -114,7 +178,7 @@ def test_theme_description_states_values_and_pptx_limit() -> None:
 
 def test_draft_id_slot_is_optional_text_with_resume_teaching() -> None:
     provider = task_definition.PROVIDER
-    (_fmt, _theme, _ms, draft_slot, _draft_file, _images) = (
+    (_fmt, _theme, _tokens, _theme_file, _ms, draft_slot, _draft_file, _images) = (
         provider.optional_input_shape
     )
     assert draft_slot.name == "draft_id"
@@ -135,7 +199,7 @@ def test_draft_file_slot_is_optional_file_with_resume_teaching() -> None:
     the id comes from (the header comment) and what resumes (the completed
     slides)."""
     provider = task_definition.PROVIDER
-    (_fmt, _theme, _ms, _draft, draft_file_slot, _images) = (
+    (_fmt, _theme, _tokens, _theme_file, _ms, _draft, draft_file_slot, _images) = (
         provider.optional_input_shape
     )
     assert draft_file_slot.name == "draft_file"
@@ -151,7 +215,9 @@ def test_draft_file_slot_is_optional_file_with_resume_teaching() -> None:
 
 def test_enum_description_is_one_clean_sentence() -> None:
     provider = task_definition.PROVIDER
-    (fmt, _theme, _ms, _draft, _draft_file, _images) = provider.optional_input_shape
+    (fmt, _theme, _tokens, _theme_file, _ms, _draft, _draft_file, _images) = (
+        provider.optional_input_shape
+    )
     # one short human sentence: the dropdown options already enumerate the
     # formats, so the label only states the purpose and the default. The
     # GENERATION default is 'all'; the re-render task keeps its own 'pptx'
@@ -163,7 +229,7 @@ def test_enum_description_is_one_clean_sentence() -> None:
 
 def test_images_slot_description_is_one_clean_sentence() -> None:
     provider = task_definition.PROVIDER
-    (_fmt, _theme, _ms, _draft, _draft_file, images_slot) = (
+    (_fmt, _theme, _tokens, _theme_file, _ms, _draft, _draft_file, images_slot) = (
         provider.optional_input_shape
     )
     assert images_slot.description == (

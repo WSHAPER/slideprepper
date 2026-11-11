@@ -52,10 +52,20 @@ from .settings import (
 )
 
 #: Display names for the theme ENUM slot values, derived from the
-#: constructs single source (one per THEME_VALUES entry).
+#: constructs single source (one per THEME_VALUES entry). The generated
+#: ``nextcloud`` theme carries its own label because its branding has
+#: two sources (the owner's design tokens file, else the instance
+#: theming) that the dropdown entry must teach.
+THEME_NEXTCLOUD_LABEL = (
+    "Nextcloud (uses your branding if a tokens file is configured; "
+    "otherwise the instance branding)"
+)
+
+#: The ``theme`` ENUM labels: one per THEME_VALUES entry.
 THEME_LABELS = (
     {THEME_AUTO: "Automatic: the model picks the best fit"}
     | {name: name.capitalize() for name in ALLOWED_THEMES}
+    | {THEME_NEXTCLOUD: THEME_NEXTCLOUD_LABEL}
     | {THEME_CUSTOM: "Custom: your validated theme file"}
 )
 
@@ -151,6 +161,24 @@ PROVIDER = TaskProcessingProvider(
             name="theme",
             description=THEME_DESCRIPTION,
             shape_type=ShapeType.ENUM,
+        ),
+        ShapeDescriptor(
+            name="tokens_file",
+            description=(
+                "Optional design tokens file (.json). Overrides the "
+                "conventional SlidePrepper/design-tokens.json for this "
+                "deck only."
+            ),
+            shape_type=ShapeType.FILE,
+        ),
+        ShapeDescriptor(
+            name="custom_theme_file",
+            description=(
+                "Optional custom theme CSS file (.css). Overrides the "
+                "conventional SlidePrepper/custom-theme.css for this "
+                "deck only."
+            ),
+            shape_type=ShapeType.FILE,
         ),
         ShapeDescriptor(
             name="max_slides",
