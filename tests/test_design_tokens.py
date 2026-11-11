@@ -15,6 +15,8 @@ from types import SimpleNamespace
 import pytest
 
 from marp_slides.design_tokens import (
+    _FORBIDDEN_FONT_CHARS,
+    _MAX_FONT_FAMILY_CHARS,
     DISABLED_TOKENS_PATHS,
     MAX_TOKENS_BYTES,
     TOKEN_KEYS,
@@ -22,7 +24,7 @@ from marp_slides.design_tokens import (
     parse_design_tokens,
     read_design_tokens,
 )
-from marp_slides.settings import Settings
+from marp_slides.settings import DEFAULT_DESIGN_TOKENS_PATH, Settings
 from marp_slides.theming import (
     WCAG_LARGE_TEXT_CONTRAST_FLOOR,
     ThemingValues,
@@ -522,3 +524,19 @@ def test_token_keys_are_exactly_the_v1_schema() -> None:
     axes the generated CSS parameterizes. Growing the schema must be a
     deliberate change to this tuple."""
     assert TOKEN_KEYS == ("color", "color_text", "font_family")
+
+
+def test_schema_surface_mirrored_by_the_context_agent_tool() -> None:
+    """The context_agent ``apply_brand_guidelines`` tool
+    (ex_app/lib/all_tools/brand_tokens.py in that repo) writes tokens files
+    for users and validates them with its OWN copy of this schema, because
+    the two ExApps ship separately and no schema endpoint exists. Every
+    value it mirrors is pinned here: a change to any of them must update
+    that mirror too, or the tool starts writing files this parser rejects
+    (fail-soft, but the user's branding silently stops applying)."""
+    assert TOKEN_KEYS == ("color", "color_text", "font_family")
+    assert _MAX_FONT_FAMILY_CHARS == 128
+    assert set('"\\`<>{};') == _FORBIDDEN_FONT_CHARS
+    assert WCAG_LARGE_TEXT_CONTRAST_FLOOR == 3.0
+    assert DEFAULT_DESIGN_TOKENS_PATH == "SlidePrepper/design-tokens.json"
+    assert parse_design_tokens({"color": "#ABC"}).color == "#aabbcc"
