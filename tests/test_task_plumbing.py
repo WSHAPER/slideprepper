@@ -2622,6 +2622,234 @@ def test_bundled_theme_renders_without_theming_kwargs(monkeypatch, settings) -> 
     assert seen["kwargs"] == {}
 
 
+# --- design tokens: the per-deck tokens_file pick ---------------------------------
+
+
+#: A second, distinct tokens document (a per-client branding), picked by
+#: its file id through the tokens_file input.
+PICKED_TOKENS_JSON = json.dumps(
+    {
+        "color": "#0b6e4f",
+        "color_text": "#f2f7f5",
+        "font_family": "Atkinson Hyperlegible",
+    }
+).encode("utf-8")
+PICKED_TOKENS_ID = 701
+
+
+def picked_file_node(file_id: int, name: str, blob: bytes) -> SimpleNamespace:
+    """A Files node a file-picker input resolves to by id (a schedule-time
+    access-checked pick: it carries a real name and user path)."""
+    return SimpleNamespace(
+        file_id=file_id,
+        is_dir=False,
+        name=name,
+        user_path=f"Branding/{name}",
+        info=SimpleNamespace(content_length=len(blob)),
+    )
+
+
+def picked_tokens_files(
+    picked: bytes = PICKED_TOKENS_JSON,
+    conventional: bytes | None = TOKENS_JSON,
+) -> FakeFilesAPI:
+    """The owner's Files with a picked tokens node AND (optionally) the
+    conventional-path node, so precedence is observable."""
+    return FakeFilesAPI(
+        nodes={
+            PICKED_TOKENS_ID: picked_file_node(PICKED_TOKENS_ID, "client.json", picked)
+        },
+        blobs=(
+            {PICKED_TOKENS_ID: picked, TOKENS_FILE_ID: TOKENS_JSON}
+            if conventional is not None
+            else {PICKED_TOKENS_ID: picked}
+        ),
+        by_path_nodes={
+            TOKENS_PATH: SimpleNamespace(is_dir=False, file_id=TOKENS_FILE_ID)
+        },
+    )
+
+
+def run_html_task(
+    monkeypatch, files: FakeFilesAPI, settings: Settings, **extra_input: object
+) -> tuple[FakeTaskProcessingAPI, dict[str, object], FakeFilesAPI]:
+    """Run one nextcloud-themed html generation task with the given extra
+    inputs; returns (api, captured theming_values, the files fake)."""
+    fake, _calls = nc_deck_scheduler()
+    monkeypatch.setattr(task_worker, "schedule_and_wait", fake)
+    nc, api = make_fake_nc(files=files, capabilities={"theming": NC_THEMING_CAPS})
+    seen = capture_theming_render(monkeypatch)
+    task_worker.process_task(
+        nc,
+        dict(
+            TASK,
+            input={
+                "prompt": "x",
+                "theme": "nextcloud",
+                "output_format": "html",
+                **extra_input,
+            },
+        ),
+        settings,
+    )
+    return api, seen, files
+
+
+def test_tokens_file_input_overrides_the_conventional_path(
+    monkeypatch, settings, caplog
+) -> None:
+    """A picked tokens_file wins over a present conventional file for
+    this one deck: the render carries the picked branding, the picked
+    file's label names the source in the log, and the conventional path
+    is never even looked up (not merged, not preferred)."""
+    files = picked_tokens_files()
+    with caplog.at_level("INFO", logger="marp_slides.task_worker"):
+        api, seen, files = run_html_task(
+            monkeypatch, files, settings, tokens_file=PICKED_TOKENS_ID
+        )
+    (result,) = api.results
+    if result["output"] is not None:
+        assert result["output"] == SUCCESS_OUTPUT
+    values = seen["theming_values"]
+    assert isinstance(values, ThemingValues)
+    assert values.color == "#0b6e4f"
+    assert values.font_family == "Atkinson Hyperlegible"
+    assert TOKENS_PATH not in files.looked_up  # the conventional file lost entirely
+    assert any(
+        "design tokens file 'Branding/client.json'" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_invalid_tokens_file_input_falls_back_to_conventional(
+    monkeypatch, settings, caplog
+) -> None:
+    """A malformed picked file is one WARNING naming it and the
+    conventional file applies instead: an override attempt must never
+    fail the deck nor silently drop branding the owner has persistent
+    files for."""
+    files = picked_tokens_files(picked=b"{not json")
+    with (
+        caplog.at_level("WARNING", logger="marp_slides.design_tokens"),
+        caplog.at_level("INFO", logger="marp_slides.task_worker"),
+    ):
+        api, seen, files = run_html_task(
+            monkeypatch, files, settings, tokens_file=PICKED_TOKENS_ID
+        )
+    (result,) = api.results
+    if result["output"] is not None:
+        assert result["output"] == SUCCESS_OUTPUT
+    values = seen["theming_values"]
+    assert isinstance(values, ThemingValues)
+    assert values.color == "#3a1b5d"  # the conventional file's branding
+    assert values.font_family == "IBM Plex Sans"
+    assert any(
+        "not valid JSON" in r.getMessage() and "Branding/client.json" in r.getMessage()
+        for r in caplog.records
+    )
+    assert any(
+        "resolving the conventional tokens file" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_vanished_tokens_pick_falls_back_to_conventional(
+    monkeypatch, settings, caplog
+) -> None:
+    """The picked file id resolves to nothing (deleted between schedule
+    and run): one WARNING names the id, the conventional chain applies,
+    and the task still ships."""
+    files = FakeFilesAPI(
+        blobs={TOKENS_FILE_ID: TOKENS_JSON},
+        by_path_nodes={
+            TOKENS_PATH: SimpleNamespace(is_dir=False, file_id=TOKENS_FILE_ID)
+        },
+    )
+    with caplog.at_level("WARNING", logger="marp_slides.design_tokens"):
+        api, seen, files = run_html_task(
+            monkeypatch, files, settings, tokens_file=PICKED_TOKENS_ID
+        )
+    (result,) = api.results
+    if result["output"] is not None:
+        assert result["output"] == SUCCESS_OUTPUT
+    values = seen["theming_values"]
+    assert isinstance(values, ThemingValues)
+    assert values.color == "#3a1b5d"
+    assert any(
+        f"file id {PICKED_TOKENS_ID}" in r.getMessage()
+        and "is not a readable file" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_picked_tokens_file_is_read_once_per_task(monkeypatch, settings) -> None:
+    """The pick rides the same per-task memo as the conventional read:
+    one by_id download per task despite the per-slide gate, the fit pass
+    and the render all resolving the branded theme."""
+    files = picked_tokens_files()
+    api, _seen, files = run_html_task(
+        monkeypatch, files, settings, tokens_file=PICKED_TOKENS_ID
+    )
+    (result,) = api.results
+    if result["output"] is not None:
+        assert result["output"] == SUCCESS_OUTPUT
+    assert files.downloaded.count(PICKED_TOKENS_ID) == 1
+    assert TOKENS_PATH not in files.looked_up
+
+
+def test_tokens_file_pick_suppressed_by_the_off_switch(
+    monkeypatch, settings, caplog
+) -> None:
+    """The '-'/'off' knob disables tokens discovery instance-wide: it
+    suppresses the per-deck pick too (the knob's contract is that no
+    user-side tokens file re-brands a deck), with one INFO naming the
+    suppressed pick."""
+    files = picked_tokens_files()
+    with caplog.at_level("INFO", logger="marp_slides.task_worker"):
+        api, seen, files = run_html_task(
+            monkeypatch,
+            files,
+            Settings(design_tokens_path="off"),
+            tokens_file=PICKED_TOKENS_ID,
+        )
+    (result,) = api.results
+    if result["output"] is not None:
+        assert result["output"] == SUCCESS_OUTPUT
+    assert seen["theming_values"] == ThemingValues.from_capabilities(NC_THEMING_CAPS)
+    assert files.downloaded == []  # neither the pick nor a path read happened
+    assert any(
+        "design tokens discovery is disabled" in r.getMessage()
+        and f"file id {PICKED_TOKENS_ID}" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_tokens_file_input_with_invalid_value_fails_before_any_llm_round(
+    monkeypatch, settings
+) -> None:
+    """A present but non-id slot VALUE is a malformed input (not a
+    fail-soft file problem): the task fails with the shared file-id
+    message before any LLM spend."""
+    fake, calls = deck_scheduler()
+    monkeypatch.setattr(task_worker, "schedule_and_wait", fake)
+    nc, api = make_fake_nc(files=FakeFilesAPI())
+    task_worker.process_task(
+        nc,
+        dict(
+            TASK,
+            input={"prompt": "x", "theme": "nextcloud", "tokens_file": "abc"},
+        ),
+        settings,
+    )
+    (result,) = api.results
+    assert result["output"] is None
+    assert (
+        "'tokens_file' must be a single Nextcloud file id"
+        in (result["user_facing_error_message"])
+    )
+    assert calls == []
+
+
 # --- progress phases + total LLM time cap ---------------------------------------
 
 
@@ -4338,3 +4566,239 @@ def test_re_render_custom_deck_with_a_rejected_theme_renders_like_default(
     assert result["output"] == SUCCESS_OUTPUT
     assert seen["theming_values"] is None
     assert any("probe slide 1" in r.getMessage() for r in caplog.records)
+
+
+# --- custom theme: the per-deck custom_theme_file pick -----------------------------
+
+
+#: A second, distinct theme CSS (a gaia-based variant), picked by its
+#: file id through the custom_theme_file input.
+PICKED_THEME_CSS = b'/* @theme picked */\n@import "gaia";\nsection { color: #abc; }\n'
+PICKED_THEME_ID = 702
+
+
+def picked_theme_files(
+    picked: bytes = PICKED_THEME_CSS,
+    conventional: bytes | None = CUSTOM_CSS,
+) -> FakeFilesAPI:
+    """The owner's Files with a picked theme node AND (optionally) the
+    conventional-path node, so precedence is observable."""
+    return FakeFilesAPI(
+        nodes={
+            PICKED_THEME_ID: picked_file_node(
+                PICKED_THEME_ID, "picked-theme.css", picked
+            )
+        },
+        blobs=(
+            {PICKED_THEME_ID: picked, CUSTOM_FILE_ID: CUSTOM_CSS}
+            if conventional is not None
+            else {PICKED_THEME_ID: picked}
+        ),
+        by_path_nodes={
+            CUSTOM_PATH: SimpleNamespace(is_dir=False, file_id=CUSTOM_FILE_ID)
+        },
+    )
+
+
+def test_custom_theme_file_input_overrides_the_conventional_path(
+    monkeypatch, settings, caplog
+) -> None:
+    """A picked custom_theme_file wins over a present conventional file
+    for this one deck: the lint, the probe gate and every render carry
+    the picked CSS (its label names the source), and the conventional
+    path is never looked up."""
+    fake, _calls = deck_scheduler(outline_json=CUSTOM_OUTLINE_JSON)
+    monkeypatch.setattr(task_worker, "schedule_and_wait", fake)
+    gated = record_gate(monkeypatch)
+    seen = capture_theming_render(monkeypatch)
+    files = picked_theme_files()
+    nc, api = make_fake_nc(files=files)
+    with caplog.at_level("INFO", logger="marp_slides.task_worker"):
+        task_worker.process_task(
+            nc,
+            dict(
+                CUSTOM_TASK,
+                input={
+                    "prompt": "x",
+                    "theme": "custom",
+                    "output_format": "html",
+                    "custom_theme_file": PICKED_THEME_ID,
+                },
+            ),
+            settings,
+        )
+    (result,) = api.results
+    assert result["output"] == SUCCESS_OUTPUT
+    theme = seen["theming_values"]
+    assert isinstance(theme, CustomTheme)
+    assert theme.path == "Branding/picked-theme.css"
+    assert '@import "gaia"' in theme.css  # the PICKED css, not the conventional one
+    assert gated == [theme]
+    assert CUSTOM_PATH not in files.looked_up
+    assert any(
+        "validated custom theme file 'Branding/picked-theme.css'" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_gate_rejected_custom_theme_pick_falls_back_to_conventional(
+    monkeypatch, settings, caplog
+) -> None:
+    """A picked theme the probe gate rejects is never applied, and the
+    CONVENTIONAL file takes over (the deck still ships as a custom
+    theme, just the persistent one): one WARNING carries the gate's
+    message naming the picked file."""
+    fake, _calls = deck_scheduler(outline_json=CUSTOM_OUTLINE_JSON)
+    monkeypatch.setattr(task_worker, "schedule_and_wait", fake)
+    rejection = CustomThemeError(
+        "The custom theme file 'Branding/picked-theme.css' was rejected: "
+        "normal content does not fit its slides."
+    )
+    gated: list[CustomTheme] = []
+
+    def gate_only_the_pick(theme: CustomTheme) -> None:
+        gated.append(theme)
+        if theme.path == "Branding/picked-theme.css":
+            raise rejection
+
+    monkeypatch.setattr(task_worker, "gate_custom_theme", gate_only_the_pick)
+    seen = capture_theming_render(monkeypatch)
+    files = picked_theme_files()
+    nc, api = make_fake_nc(files=files)
+    with caplog.at_level("WARNING", logger="marp_slides.task_worker"):
+        task_worker.process_task(
+            nc,
+            dict(
+                CUSTOM_TASK,
+                input={
+                    "prompt": "x",
+                    "theme": "custom",
+                    "output_format": "html",
+                    "custom_theme_file": PICKED_THEME_ID,
+                },
+            ),
+            settings,
+        )
+    (result,) = api.results
+    assert result["output"] == SUCCESS_OUTPUT
+    assert len(gated) == 2  # the pick, then the conventional file
+    theme = seen["theming_values"]
+    assert isinstance(theme, CustomTheme)
+    assert theme.path == CUSTOM_PATH  # the conventional css applies
+    assert b"theme: custom" in api.uploads[1][1][1]
+    assert any(
+        "Branding/picked-theme.css" in r.getMessage()
+        and "The default theme applies instead." in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_lint_rejected_custom_theme_pick_falls_back_to_conventional(
+    monkeypatch, settings, caplog
+) -> None:
+    """A picked file that fails the static lint never reaches the gate
+    render; the conventional file takes over with the lint reason
+    logged, and the deck still ships as a custom theme."""
+    fake, _calls = deck_scheduler(outline_json=CUSTOM_OUTLINE_JSON)
+    monkeypatch.setattr(task_worker, "schedule_and_wait", fake)
+    gated = record_gate(monkeypatch)
+    seen = capture_theming_render(monkeypatch)
+    hostile = b"section { background: url(http://169.254.169.254/latest); }"
+    files = picked_theme_files(picked=hostile)
+    nc, api = make_fake_nc(files=files)
+    with caplog.at_level("WARNING", logger="marp_slides.task_worker"):
+        task_worker.process_task(
+            nc,
+            dict(
+                CUSTOM_TASK,
+                input={
+                    "prompt": "x",
+                    "theme": "custom",
+                    "output_format": "html",
+                    "custom_theme_file": PICKED_THEME_ID,
+                },
+            ),
+            settings,
+        )
+    (result,) = api.results
+    assert result["output"] == SUCCESS_OUTPUT
+    assert len(gated) == 1  # only the conventional file was gated
+    theme = seen["theming_values"]
+    assert isinstance(theme, CustomTheme)
+    assert theme.path == CUSTOM_PATH
+    assert any(
+        "references an external resource" in r.getMessage() for r in caplog.records
+    )
+
+
+def test_unusable_pick_and_missing_conventional_fall_back_to_default(
+    monkeypatch, settings, caplog
+) -> None:
+    """The whole chain exhausted (an unresolvable pick, no conventional
+    file): the documented default-theme fallback applies, never a task
+    failure."""
+    fake, calls = deck_scheduler(outline_json=DEFAULT_OUTLINE_JSON)
+    monkeypatch.setattr(task_worker, "schedule_and_wait", fake)
+    gated = record_gate(monkeypatch)
+    seen = capture_theming_render(monkeypatch)
+    files = FakeFilesAPI()  # neither a pick node nor a conventional file
+    nc, api = make_fake_nc(files=files)
+    with caplog.at_level("WARNING", logger="marp_slides.task_worker"):
+        task_worker.process_task(
+            nc,
+            dict(
+                CUSTOM_TASK,
+                input={
+                    "prompt": "x",
+                    "theme": "custom",
+                    "output_format": "html",
+                    "custom_theme_file": PICKED_THEME_ID,
+                },
+            ),
+            settings,
+        )
+    (result,) = api.results
+    assert result["output"] == SUCCESS_OUTPUT
+    assert gated == []
+    assert seen["theming_values"] is None
+    assert "requires the 'default' theme" in json.dumps(calls[0])
+    assert b"theme: default" in api.uploads[1][1][1]
+
+
+def test_custom_theme_pick_suppressed_by_the_off_switch(
+    monkeypatch, settings, caplog
+) -> None:
+    """The '-'/'off' knob disables custom theme discovery instance-wide:
+    it suppresses the per-deck pick too, with one INFO naming it, and
+    the default-theme fallback applies."""
+    fake, _calls = deck_scheduler(outline_json=DEFAULT_OUTLINE_JSON)
+    monkeypatch.setattr(task_worker, "schedule_and_wait", fake)
+    gated = record_gate(monkeypatch)
+    seen = capture_theming_render(monkeypatch)
+    files = picked_theme_files()
+    nc, api = make_fake_nc(files=files)
+    with caplog.at_level("INFO", logger="marp_slides.task_worker"):
+        task_worker.process_task(
+            nc,
+            dict(
+                CUSTOM_TASK,
+                input={
+                    "prompt": "x",
+                    "theme": "custom",
+                    "output_format": "html",
+                    "custom_theme_file": PICKED_THEME_ID,
+                },
+            ),
+            Settings(custom_theme_path="off"),
+        )
+    (result,) = api.results
+    assert result["output"] == SUCCESS_OUTPUT
+    assert gated == []
+    assert seen["theming_values"] is None
+    assert files.downloaded == []  # neither the pick nor a path read happened
+    assert any(
+        "custom theme discovery is disabled" in r.getMessage()
+        and f"file id {PICKED_THEME_ID}" in r.getMessage()
+        for r in caplog.records
+    )
+    assert b"theme: default" in api.uploads[1][1][1]

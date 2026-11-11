@@ -64,7 +64,14 @@ through the probe-deck geometry gate before any LLM round, then handed
 to every marp call and measurement through the same theming seam. A
 file that is missing, rejected (the WARNING carries the gate's message)
 or unverifiable means the default theme: a theme file never fails a
-task.
+task. Both branding sources also accept a PER-DECK pick through the
+generation task's optional ``tokens_file`` / ``custom_theme_file`` file
+inputs: a picked file overrides the conventional path for that one task
+only (the conventional file stays the persistent default), and an
+unusable pick falls back to the conventional chain - picked file >
+conventional path > instance theming > stock default - so a pick never
+fails a deck either; the instance-wide off switches suppress a pick
+with it.
 The final validated Marp Markdown is
 retained as ``slide_deck_source`` so a later turn can make small edits without
 a full recompute. On success every generated deck file plus that source
@@ -150,10 +157,12 @@ from .capability_guards import sweep_capability_guards
 from .constructs import THEME_AUTO
 from .custom_theme import (
     CUSTOM_THEME_NAME,
+    DISABLED_CUSTOM_THEME_PATHS,
     CustomTheme,
     CustomThemeError,
     ThemeSource,
     read_custom_theme,
+    read_custom_theme_by_id,
 )
 from .deck_pipeline import (
     DeckError,
@@ -173,7 +182,12 @@ from .deck_pipeline import (
     validate_prompt,
     validate_theme,
 )
-from .design_tokens import DesignTokens, read_design_tokens
+from .design_tokens import (
+    DISABLED_TOKENS_PATHS,
+    DesignTokens,
+    read_design_tokens,
+    read_design_tokens_by_id,
+)
 from .draft_delivery import deliver_deck_files
 from .draft_store import (
     SLIDE_DONE,
@@ -985,7 +999,8 @@ def _notice_dormant_tokens(
     theme = validated.frontmatter.get("theme")
     if theme == THEME_NAME:
         return
-    if _task_design_tokens(nc, task_id, settings.design_tokens_path) is not None:
+    tokens, _label = _task_design_tokens(nc, task_id, settings.design_tokens_path)
+    if tokens is not None:
         LOGGER.info(
             "Task %s: a design tokens file exists, but the deck theme is "
             "%r; design tokens apply to the nextcloud theme only",
@@ -1836,6 +1851,32 @@ def _file_input_id(raw: object, slot: str) -> int:
     return raw
 
 
+def _optional_file_input_id(raw: object, slot: str) -> int | None:
+    """The optional single-valued FILE task input's id: None when the
+    input is absent, the validated file id when present (a present but
+    malformed VALUE fails like any other invalid input; an unusable FILE
+    is the fail-soft path handled at the resolution seam)."""
+    if raw is None:
+        return None
+    return _file_input_id(raw, slot)
+
+
+def _seed_branding_file_inputs(task_input: Mapping[str, Any], task_id: int) -> None:
+    """Seed the per-task branding overrides from the optional
+    ``tokens_file`` / ``custom_theme_file`` inputs: the picked ids ride
+    the resolution seams for this task only (see
+    :func:`_resolve_task_tokens` / :func:`_resolve_task_custom_theme`
+    for the precedence and fail-soft chain)."""
+    tokens_file = _optional_file_input_id(task_input.get("tokens_file"), "tokens_file")
+    if tokens_file is not None:
+        _TASK_TOKENS_FILE_IDS[task_id] = tokens_file
+    theme_file = _optional_file_input_id(
+        task_input.get("custom_theme_file"), "custom_theme_file"
+    )
+    if theme_file is not None:
+        _TASK_CUSTOM_THEME_FILE_IDS[task_id] = theme_file
+
+
 def _download_text_file(
     nc: NextcloudApp, file_id: int, slot: str, max_bytes: int
 ) -> tuple[str, str, str]:
@@ -2061,31 +2102,78 @@ def _re_render_deck(
     return markdown
 
 
+#: The per-task branding file-picker overrides (the optional
+#: ``tokens_file`` / ``custom_theme_file`` task inputs): task_id -> the
+#: picked file id. Seeded once per GENERATION task by
+#: :func:`_generate_deck` (the one place the task input is in hand;
+#: the re-render task keeps the conventional-path resolution only) and
+#: consulted by the resolution seams, which otherwise re-resolve per
+#: slide measurement and render. Cleared at every task boundary like the
+#: memos: the worker loop is sequential, so one slot per task is exact.
+_TASK_TOKENS_FILE_IDS: dict[int, int] = {}
+_TASK_CUSTOM_THEME_FILE_IDS: dict[int, int] = {}
+
 #: The per-task design-tokens memo: ``(task_id, tokens_path)`` -> the
-#: resolved tokens (None = absent or malformed). The seam re-resolves the
-#: branded theme for every slide measurement, the render-time fit pass and
-#: each format render, but the FILE must be read once per task: repeated
-#: DAV GETs would multiply a malformed file's WARNING and an oversize
-#: node's bytes, and a file edited mid-task could make the per-slide gates
+#: resolved tokens and the label naming the file they came from (None =
+#: absent or malformed). The seam re-resolves the branded theme for
+#: every slide measurement, the render-time fit pass and each format
+#: render, but the FILE must be read once per task: repeated DAV GETs
+#: would multiply a malformed file's WARNING and an oversize node's
+#: bytes, and a file edited mid-task could make the per-slide gates
 #: measure under one theme while the render applies another. One slot per
 #: task is exact because the worker loop processes tasks sequentially and
 #: :func:`process_task` clears the memo at every task boundary.
-_DESIGN_TOKENS_MEMO: dict[tuple[int, str], DesignTokens | None] = {}
+_DESIGN_TOKENS_MEMO: dict[tuple[int, str], tuple[DesignTokens | None, str]] = {}
 
 
 def _task_design_tokens(
     nc: NextcloudApp, task_id: int, tokens_path: str
-) -> DesignTokens | None:
-    """The owner's design tokens, resolved ONCE per task: the first caller
-    pays the DAV read, every later resolution of the same task reuses the
-    result (absent and malformed included), so one task means at most one
+) -> tuple[DesignTokens | None, str]:
+    """The owner's design tokens, resolved ONCE per task together with
+    the label naming the source file: the first caller pays the DAV
+    read, every later resolution of the same task reuses the result
+    (absent and malformed included), so one task means at most one
     lookup, one WARNING, and one consistent set of branding values across
-    every gate and render. Never raises (:func:`read_design_tokens` is
-    fail-soft by contract)."""
+    every gate and render. Never raises (:func:`read_design_tokens` and
+    :func:`read_design_tokens_by_id` are fail-soft by contract)."""
     key = (task_id, tokens_path)
     if key not in _DESIGN_TOKENS_MEMO:
-        _DESIGN_TOKENS_MEMO[key] = read_design_tokens(nc, tokens_path)
+        _DESIGN_TOKENS_MEMO[key] = _resolve_task_tokens(nc, task_id, tokens_path)
     return _DESIGN_TOKENS_MEMO[key]
+
+
+def _resolve_task_tokens(
+    nc: NextcloudApp, task_id: int, tokens_path: str
+) -> tuple[DesignTokens | None, str]:
+    """The task's design tokens under the per-deck precedence: a picked
+    ``tokens_file`` input wins while its content is usable, an unusable
+    pick falls back to the conventional-path file (never a task
+    failure), and no pick resolves the conventional path as before.
+    The instance-wide off switch ('-'/'off') suppresses the PICKED file
+    too: the knob's contract is that no user-side tokens file re-brands
+    a deck on this instance."""
+    override_id = _TASK_TOKENS_FILE_IDS.get(task_id)
+    if override_id is not None and tokens_path.strip().lower() in DISABLED_TOKENS_PATHS:
+        LOGGER.info(
+            "Task %s: design tokens discovery is disabled; the picked "
+            "tokens_file (file id %s) is ignored and the instance theming "
+            "applies",
+            task_id,
+            override_id,
+        )
+        override_id = None
+    if override_id is not None:
+        tokens, label = read_design_tokens_by_id(nc, override_id)
+        if tokens is not None:
+            return tokens, label
+        LOGGER.info(
+            "Task %s: the picked tokens_file (file id %s) was not usable; "
+            "resolving the conventional tokens file '%s' instead",
+            task_id,
+            override_id,
+            tokens_path,
+        )
+    return read_design_tokens(nc, tokens_path), tokens_path
 
 
 def _resolve_theming_values(
@@ -2099,12 +2187,13 @@ def _resolve_theming_values(
     (:data:`marp_slides.theming.THEMING_DEFAULTS`) so the deck still
     renders — a branding mismatch is never worth failing a task over.
 
-    A design tokens file at ``tokens_path`` in the TASK OWNER's Files
-    (the org-branding scenario) REPLACES the instance branding: the
-    overlay's token colors and font win, the instance background,
-    slogan and name are cleared, and every gate and render of the task
-    measures and renders the token-branded theme through this same
-    seam. The file is resolved ONCE per task
+    A design tokens file (the conventional path, or a picked
+    ``tokens_file`` input when the task carried one) in the TASK
+    OWNER's Files (the org-branding scenario) REPLACES the instance
+    branding: the overlay's token colors and font win, the instance
+    background, slogan and name are cleared, and every gate and render
+    of the task measures and renders the token-branded theme through
+    this same seam. The file is resolved ONCE per task
     (:func:`_task_design_tokens`), under the task's ambient DAV
     impersonation, and is fail-soft by the tokens module's contract
     (missing file: DEBUG and today's behavior; malformed file: one
@@ -2122,14 +2211,14 @@ def _resolve_theming_values(
         )
         theming = {}
     values = ThemingValues.from_capabilities(theming)
-    tokens = _task_design_tokens(nc, task_id, tokens_path)
+    tokens, tokens_label = _task_design_tokens(nc, task_id, tokens_path)
     if tokens is not None:
         values = tokens.overlay(values)
         LOGGER.info(
             "Task %s: nextcloud theme uses the design tokens file '%s' "
             "(color %s, font %r)",
             task_id,
-            tokens_path,
+            tokens_label,
             values.color,
             values.font_family or "Inter",
         )
@@ -2176,23 +2265,60 @@ def _task_custom_theme(
     can never fail a task."""
     key = (task_id, settings.custom_theme_path)
     if key not in _CUSTOM_THEME_MEMO:
-        _CUSTOM_THEME_MEMO[key] = _validated_custom_theme(
-            nc, task_id, settings.custom_theme_path
-        )
+        _CUSTOM_THEME_MEMO[key] = _resolve_task_custom_theme(nc, task_id, settings)
     return _CUSTOM_THEME_MEMO[key]
+
+
+def _resolve_task_custom_theme(
+    nc: NextcloudApp, task_id: int, settings: Settings
+) -> CustomTheme | None:
+    """The task's custom theme under the per-deck precedence: a picked
+    ``custom_theme_file`` input wins while it lints and passes the
+    probe-deck gate, an unusable pick falls back to the
+    conventional-path resolution (which itself falls back to the default
+    theme), and no pick resolves the conventional path as before. The
+    instance-wide off switch ('-'/'off') suppresses the PICKED file too,
+    exactly like the tokens knob."""
+    override_id = _TASK_CUSTOM_THEME_FILE_IDS.get(task_id)
+    if (
+        override_id is not None
+        and settings.custom_theme_path.strip().lower() in DISABLED_CUSTOM_THEME_PATHS
+    ):
+        LOGGER.info(
+            "Task %s: custom theme discovery is disabled; the picked "
+            "custom_theme_file (file id %s) is ignored and the %s theme "
+            "applies",
+            task_id,
+            override_id,
+            THEME_FALLBACK_FOR_CUSTOM,
+        )
+        override_id = None
+    if override_id is not None:
+        theme = _validated_custom_theme_file(nc, task_id, override_id)
+        if theme is not None:
+            return theme
+        LOGGER.info(
+            "Task %s: the picked custom_theme_file (file id %s) was not "
+            "usable; resolving the conventional custom theme file '%s' "
+            "instead",
+            task_id,
+            override_id,
+            settings.custom_theme_path,
+        )
+    return _validated_custom_theme(nc, task_id, settings.custom_theme_path)
 
 
 def _validated_custom_theme(
     nc: NextcloudApp, task_id: int, path: str
 ) -> CustomTheme | None:
-    """Read, lint and gate the owner's custom theme file (one memo
-    slot's worth of work). Every way the file can be unusable falls back
-    to the default theme with one WARNING, never a task failure: missing,
-    rejected by the static lint, rejected by the probe-deck gate (the
-    WARNING carries the gate's message: each overflowing probe slide and
-    by how much), or unverifiable because the gate's measurement
-    infrastructure failed. An unvalidated theme is never used, and the
-    deck itself still ships."""
+    """Read, lint and gate the owner's conventional custom theme file
+    (one memo slot's worth of work). Every way the file can be unusable
+    falls back to the default theme with one WARNING, never a task
+    failure: missing, rejected by the static lint, rejected by the
+    probe-deck gate (the WARNING carries the gate's message: each
+    overflowing probe slide and by how much), or unverifiable because
+    the gate's measurement infrastructure failed. An unvalidated theme
+    is never used, and the deck itself still ships."""
     try:
         theme = read_custom_theme(nc, path)
     except CustomThemeError as exc:
@@ -2207,6 +2333,41 @@ def _validated_custom_theme(
             THEME_FALLBACK_FOR_CUSTOM,
         )
         return None
+    return _gated_custom_theme(task_id, theme)
+
+
+def _validated_custom_theme_file(
+    nc: NextcloudApp, task_id: int, file_id: int
+) -> CustomTheme | None:
+    """Read, lint and gate the PICKED custom theme file (the
+    ``custom_theme_file`` input's id; one memo slot's worth of work):
+    the by-id twin of :func:`_validated_custom_theme` with the same
+    fail-soft contract. An unusable pick is one WARNING naming the pick,
+    never a task failure; the caller falls back to the conventional
+    file."""
+    try:
+        theme = read_custom_theme_by_id(nc, file_id)
+    except CustomThemeError as exc:
+        _warn_rejected_custom_theme(task_id, exc)
+        return None
+    if theme is None:
+        LOGGER.warning(
+            "Task %s: theme 'custom' was requested with a picked "
+            "custom_theme_file (file id %s) that is not a usable theme "
+            "file; the conventional-path file applies next",
+            task_id,
+            file_id,
+        )
+        return None
+    return _gated_custom_theme(task_id, theme)
+
+
+def _gated_custom_theme(task_id: int, theme: CustomTheme) -> CustomTheme | None:
+    """The probe-deck gate tail shared by the conventional-path and the
+    picked-file readers: a rejected theme is never used (the WARNING
+    carries the gate's message), an unverifiable one neither, and a
+    passing one logs its digest. ``theme.path`` names the file the theme
+    came from in every message."""
     try:
         gate_custom_theme(theme)
     except CustomThemeError as exc:
@@ -2217,7 +2378,7 @@ def _validated_custom_theme(
             "Task %s: the custom theme file '%s' could not be validated "
             "(%s); the %s theme applies",
             task_id,
-            path,
+            theme.path,
             exc,
             THEME_FALLBACK_FOR_CUSTOM,
         )
@@ -2225,7 +2386,7 @@ def _validated_custom_theme(
     LOGGER.info(
         "Task %s: theme custom uses the validated custom theme file '%s' (sha256 %s)",
         task_id,
-        path,
+        theme.path,
         theme.digest[:12],
     )
     return theme
@@ -2742,6 +2903,8 @@ def process_task(nc: NextcloudApp, task: Mapping[str, Any], settings: Settings) 
     # next task re-resolves the (possibly different) owner's file fresh
     _DESIGN_TOKENS_MEMO.clear()
     _CUSTOM_THEME_MEMO.clear()
+    _TASK_TOKENS_FILE_IDS.clear()
+    _TASK_CUSTOM_THEME_FILE_IDS.clear()
     markdown: str | None = None
     drafts = _DraftSession(enabled=settings.drafts_enabled, task_id=task_id)
     user_id: str | None = None
@@ -2836,6 +2999,9 @@ def _generate_deck(
     )
     max_slides = _validate_max_slides(task_input.get("max_slides"), settings)
     image_file_ids = validate_images_slot(task_input.get("images"))
+    # the per-deck branding picks ride the resolution seams from here on
+    # (before the custom pre-check below, which must see a picked file)
+    _seed_branding_file_inputs(task_input, task_id)
     # a 'custom' request is settled BEFORE any LLM spend: no usable file
     # (absent, or rejected by the lint or the probe-deck gate, with a
     # WARNING naming why) means the documented fallback, so the model
