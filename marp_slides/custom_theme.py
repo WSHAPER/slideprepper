@@ -45,7 +45,11 @@ it runs under the task's ambient impersonation, a missing file is None
 oversize node is refused before the download. A file that fails the lint
 raises :class:`CustomThemeError` with the precise reason; the worker logs
 it as a WARNING and falls back to the default theme, exactly like a probe
-gate rejection.
+gate rejection. A generation task can also name a theme file PER DECK
+through the optional ``custom_theme_file`` input (a picked file id, read
+by :func:`read_custom_theme_by_id` through the same lint): the picked
+file overrides the conventional path for that one task, and an unusable
+pick falls back to the conventional chain rather than failing the deck.
 """
 
 from __future__ import annotations
@@ -312,17 +316,76 @@ def read_custom_theme(nc: Any, path: str) -> CustomTheme | None:
     if node is None or getattr(node, "is_dir", False):
         LOGGER.debug("no custom theme file at '%s'", normalized)
         return None
-    reported = getattr(getattr(node, "info", None), "content_length", None)
-    if isinstance(reported, int) and reported > MAX_CUSTOM_THEME_BYTES:
-        raise _oversize(normalized, reported)
+    data = _download_theme_node(download, node, normalized)
+    return None if data is None else parse_custom_theme(data, normalized)
+
+
+def read_custom_theme_by_id(nc: Any, file_id: int) -> CustomTheme | None:
+    """Read and lint a PICKED custom theme file by its Nextcloud file id
+    (the generation task's optional ``custom_theme_file`` input): the
+    same caps, the same download seam and the same static lint as
+    :func:`read_custom_theme`, differing only in how the node is found
+    (``by_id`` for an id the server already resolved and access-checked
+    at schedule time, not ``by_path`` under the ambient impersonation).
+
+    The return contract mirrors the by-path read exactly: None when
+    there is no usable file (an unresolvable id, a folder, or a failed
+    download, each with one WARNING naming the pick, because a picked
+    file is EXPECTED to exist), and :class:`CustomThemeError` naming the
+    picked file and the reason when the content fails the lint. The
+    returned theme's ``path`` field carries the picked file's label (its
+    Files path, its name, or a file-id fallback) for messages and
+    logs."""
+    files = getattr(nc, "files", None)
+    by_id = getattr(files, "by_id", None)
+    download = getattr(files, "download", None)
+    if by_id is None or download is None:
+        LOGGER.debug("no Files API available; the picked custom theme is skipped")
+        return None
     try:
-        data = download(node)
+        node = by_id(file_id)
     except Exception as exc:  # noqa: BLE001 - a theme file must never crash a task
         LOGGER.warning(
-            "the custom theme file '%s' could not be read (%s)", normalized, exc
+            "the picked custom theme file (file id %s) could not be looked up (%s)",
+            file_id,
+            exc,
         )
         return None
-    return parse_custom_theme(bytes(data), normalized)
+    label = _picked_file_label(node, file_id)
+    if node is None or getattr(node, "is_dir", False):
+        LOGGER.warning(
+            "the picked custom theme file (file id %s) is not a readable file",
+            file_id,
+        )
+        return None
+    data = _download_theme_node(download, node, label)
+    return None if data is None else parse_custom_theme(data, label)
+
+
+def _picked_file_label(node: Any, file_id: int) -> str:
+    """The label naming a picked file in messages: its Files path when
+    the node exposes one, its name otherwise, a file-id fallback when
+    even those are absent."""
+    user_path = str(getattr(node, "user_path", "") or "").strip().strip("/")
+    if user_path:
+        return user_path
+    name = str(getattr(node, "name", "") or "").strip()
+    return name or f"file id {file_id}"
+
+
+def _download_theme_node(download: Any, node: Any, label: str) -> bytes | None:
+    """The shared read tail of both theme readers: the pre-download size
+    cap (an oversize node raises, naming the file, exactly like the
+    by-path read) and the download itself (None with one WARNING on a
+    failed read)."""
+    reported = getattr(getattr(node, "info", None), "content_length", None)
+    if isinstance(reported, int) and reported > MAX_CUSTOM_THEME_BYTES:
+        raise _oversize(label, reported)
+    try:
+        return bytes(download(node))
+    except Exception as exc:  # noqa: BLE001 - a theme file must never crash a task
+        LOGGER.warning("the custom theme file '%s' could not be read (%s)", label, exc)
+        return None
 
 
 def probe_blocking(reports: Sequence[SlideOverflow]) -> tuple[SlideOverflow, ...]:

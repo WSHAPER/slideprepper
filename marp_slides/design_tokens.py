@@ -14,6 +14,13 @@ all resolve the branded theme through the same
 the token branding INSTEAD of the instance theming: the file replaces
 instance-derived branding, it does not merge with it.
 
+A generation task can also name a tokens file PER DECK through the
+optional ``tokens_file`` input (a picked file id, resolved by
+:func:`read_design_tokens_by_id` through this same parse chain): the
+picked file overrides the conventional path for that one task, and an
+unusable picked file falls back to the conventional chain rather than
+failing the deck.
+
 v1 is deliberately shallow: two colors and one font family, exactly the
 branding surface the generated theme CSS parameterizes today (see
 :func:`marp_slides.theming.generate_theme_css`). No raw CSS, no sizes,
@@ -301,21 +308,85 @@ def read_design_tokens(nc: Any, path: str) -> DesignTokens | None:
     if node is None or getattr(node, "is_dir", False):
         LOGGER.debug("no design tokens file at '%s'; instance theming applies", path)
         return None
+    data = _download_tokens_node(download, node, path)
+    return None if data is None else _tokens_from_bytes(data, path)
+
+
+def read_design_tokens_by_id(nc: Any, file_id: int) -> tuple[DesignTokens | None, str]:
+    """Read a PICKED tokens file by its Nextcloud file id (the generation
+    task's optional ``tokens_file`` input): the same size cap, the same
+    download seam and the SAME strict parse chain as
+    :func:`read_design_tokens`, differing only in how the node is found
+    (``by_id`` for an id the server already resolved and access-checked
+    at schedule time, not ``by_path`` under the ambient impersonation).
+
+    Returns ``(tokens, label)``: the validated tokens (None on any
+    problem, never a raise, so the caller falls back to the
+    conventional-path file) and the label naming the picked file (its
+    Files path, its name, or a file-id fallback) for the caller's logs.
+    A picked file is EXPECTED to exist, so an unresolvable id or a
+    folder is one WARNING, not the by-path read's DEBUG: the owner
+    deliberately chose this file and silence would hide why the deck
+    did not carry it."""
+    files = getattr(nc, "files", None)
+    by_id = getattr(files, "by_id", None)
+    download = getattr(files, "download", None)
+    if by_id is None or download is None:
+        LOGGER.debug("no Files API available; the picked design tokens file is skipped")
+        return None, f"file id {file_id}"
+    try:
+        node = by_id(file_id)
+    except Exception as exc:  # noqa: BLE001 - a branding file must never fail a task
+        LOGGER.warning(
+            "the picked design tokens file (file id %s) could not be looked up "
+            "(%s); the conventional-path file applies",
+            file_id,
+            exc,
+        )
+        return None, f"file id {file_id}"
+    label = _picked_file_label(node, file_id)
+    if node is None or getattr(node, "is_dir", False):
+        LOGGER.warning(
+            "the picked design tokens file (file id %s) is not a readable "
+            "file; the conventional-path file applies",
+            file_id,
+        )
+        return None, label
+    data = _download_tokens_node(download, node, label)
+    if data is None:
+        return None, label
+    return _tokens_from_bytes(data, label), label
+
+
+def _picked_file_label(node: Any, file_id: int) -> str:
+    """The label naming a picked file in messages: its Files path when
+    the node exposes one, its name otherwise, a file-id fallback when
+    even those are absent."""
+    user_path = str(getattr(node, "user_path", "") or "").strip().strip("/")
+    if user_path:
+        return user_path
+    name = str(getattr(node, "name", "") or "").strip()
+    return name or f"file id {file_id}"
+
+
+def _download_tokens_node(download: Any, node: Any, label: str) -> bytes | None:
+    """The shared read tail of both tokens readers: the pre-download size
+    cap and the download itself, fail-soft with ``label`` naming the
+    file (None on either problem)."""
     reported = getattr(getattr(node, "info", None), "content_length", None)
     if isinstance(reported, int) and reported > MAX_TOKENS_BYTES:
-        _warn_oversize(path, reported)
+        _warn_oversize(label, reported)
         return None
     try:
-        data = download(node)
+        return bytes(download(node))
     except Exception as exc:  # noqa: BLE001 - a branding file must never fail a task
         LOGGER.warning(
             "the design tokens file '%s' could not be read (%s); the "
             "instance theming applies",
-            path,
+            label,
             exc,
         )
         return None
-    return _tokens_from_bytes(data, path)
 
 
 def _warn_oversize(path: str, size: int) -> None:
