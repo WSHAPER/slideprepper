@@ -58,6 +58,13 @@ instance's theming values (``nc.capabilities["theming"]``, the raw dict
 with hex color strings) per task and hands them to every marp call of
 that task, falling back to the stock Nextcloud defaults when the
 capabilities are unavailable — a theming issue never fails a task.
+The ``custom`` theme is the owner's own Marp theme CSS from their Files
+(``settings.custom_theme_path``): read once per task, linted and run
+through the probe-deck geometry gate before any LLM round, then handed
+to every marp call and measurement through the same theming seam. A
+file that is missing, rejected (the WARNING carries the gate's message)
+or unverifiable means the default theme: a theme file never fails a
+task.
 The final validated Marp Markdown is
 retained as ``slide_deck_source`` so a later turn can make small edits without
 a full recompute. On success every generated deck file plus that source
@@ -141,12 +148,20 @@ from niquests import Timeout as RequestsTimeout
 
 from .capability_guards import sweep_capability_guards
 from .constructs import THEME_AUTO
+from .custom_theme import (
+    CUSTOM_THEME_NAME,
+    CustomTheme,
+    CustomThemeError,
+    ThemeSource,
+    read_custom_theme,
+)
 from .deck_pipeline import (
     DeckError,
     SlideOverflowError,
     ValidatedDeck,
     _OverflowMeasurementError,
     build_deck_filename,
+    gate_custom_theme,
     marp_html_gate,
     measure_deck_overflow,
     measure_slide_overflow,
@@ -501,21 +516,22 @@ def _measure_slide_fit(
     :func:`_reject_slide_overflow`), and the resolution honors the
     task owner's design tokens file (``settings.design_tokens_path``)
     so a token-branded deck measures against exactly the theme it will
-    render with. This is not an LLM round: it never touches the shared
+    render with. A ``custom`` deck measures under the owner's validated
+    custom theme the same way (see :func:`_resolve_theme_source`). This is not an LLM round: it never touches the shared
     LLM time budget."""
     markdown = f"---\nmarp: true\ntheme: {theme}\n---\n\n{slide_markdown}"
-    measure_kwargs: dict[str, ThemingValues] = {}
-    if theme == THEME_NAME:
+    measure_kwargs: dict[str, ThemeSource] = {}
+    if theme in (THEME_NAME, CUSTOM_THEME_NAME):
         # _resolve_theming_values is designed never to raise (it falls
-        # back to the stock branding), but if a future resolution failure
-        # ever escapes, measure WITHOUT the values and let the driver's
-        # fail-closed error hit the fail-open handling below
+        # back to the stock branding) and a custom theme was resolved
+        # (rejected ones fall back to default) before authoring began,
+        # but if a future resolution failure ever escapes, measure
+        # WITHOUT the source and let the driver's fail-closed error (or
+        # the default-geometry fallback) hit the handling below
         try:
-            measure_kwargs = {
-                "theming_values": _resolve_theming_values(
-                    nc, task_id, tokens_path=settings.design_tokens_path
-                )
-            }
+            source = _resolve_theme_source(nc, task_id, theme, settings)
+            if source is not None:
+                measure_kwargs = {"theming_values": source}
         except Exception as exc:  # noqa: BLE001 - defensive only, see above
             LOGGER.warning(
                 "Task %s: slide %d theming resolution failed (%s); measuring "
@@ -805,7 +821,7 @@ def _rescue_overflowing_slide(
 
 def _reject_deck_overflow(
     markdown: str,
-    theming_values: ThemingValues | None,
+    theming_values: ThemeSource | None,
     task_id: int,
     settings: Settings,
 ) -> None:
@@ -826,7 +842,7 @@ def _reject_deck_overflow(
     # the branded-theme kwarg rides only when the caller resolved values
     # (a nextcloud deck), so every bundled-theme measurement call keeps
     # its exact pre-theming shape - the same discipline as render_kwargs
-    measure_kwargs: dict[str, ThemingValues] = (
+    measure_kwargs: dict[str, ThemeSource] = (
         {"theming_values": theming_values} if theming_values is not None else {}
     )
     try:
@@ -935,13 +951,13 @@ def _force_fit_floor(slide_markdown: str, font_px: int) -> str:
 
 def _measure_deck_reports(
     markdown: str,
-    theming_values: ThemingValues | None,
+    theming_values: ThemeSource | None,
     task_id: int,
 ) -> tuple[SlideOverflow, ...] | None:
     """One batch measurement of a deck (None on measurement
     infrastructure failure), sharing the branded-theme kwarg discipline
     of the render gate."""
-    measure_kwargs: dict[str, ThemingValues] = (
+    measure_kwargs: dict[str, ThemeSource] = (
         {"theming_values": theming_values} if theming_values is not None else {}
     )
     try:
@@ -1006,11 +1022,7 @@ def _fit_deck_for_render(
     if not settings.overflow_check:
         return validated, markdown
     theme = validated.frontmatter.get("theme")
-    theming_values = (
-        _resolve_theming_values(nc, task_id, tokens_path=settings.design_tokens_path)
-        if theme == THEME_NAME
-        else None
-    )
+    theming_values = _resolve_theme_source(nc, task_id, theme, settings)
     reports = _measure_deck_reports(markdown, theming_values, task_id)
     if not reports:
         return validated, markdown
@@ -2136,6 +2148,120 @@ def _resolve_theming_values(
     return values
 
 
+#: The theme a ``custom`` request falls back to when the owner has no
+#: usable custom theme file (absent, disabled, rejected by the lint or
+#: the probe-deck gate, or not verifiable because the measurement
+#: infrastructure is down): the theme the custom one is
+#: held to by the probe gate, and the geometry marp itself renders a
+#: ``custom`` deck with when no CSS is registered.
+THEME_FALLBACK_FOR_CUSTOM = "default"
+
+#: The per-task custom theme memo: ``(task_id, theme_path)`` -> the
+#: validated theme, or None (no usable file: the default theme applies).
+#: Like the design tokens memo, the FILE is
+#: read once per task (one DAV read, one WARNING, one consistent theme
+#: across every gate and render; a file deleted or edited mid-task
+#: cannot split the deck between two themes), and :func:`process_task`
+#: clears it at every task boundary. The probe-gate verdict itself is
+#: cached across tasks by content digest in the deck pipeline.
+_CUSTOM_THEME_MEMO: dict[tuple[int, str], CustomTheme | None] = {}
+
+
+def _task_custom_theme(
+    nc: NextcloudApp, task_id: int, settings: Settings
+) -> CustomTheme | None:
+    """The owner's validated custom theme, resolved ONCE per task: the
+    linted CSS that passed the probe-deck gate, or None when there is no
+    usable file (the default theme applies). Never raises: a theme file
+    can never fail a task."""
+    key = (task_id, settings.custom_theme_path)
+    if key not in _CUSTOM_THEME_MEMO:
+        _CUSTOM_THEME_MEMO[key] = _validated_custom_theme(
+            nc, task_id, settings.custom_theme_path
+        )
+    return _CUSTOM_THEME_MEMO[key]
+
+
+def _validated_custom_theme(
+    nc: NextcloudApp, task_id: int, path: str
+) -> CustomTheme | None:
+    """Read, lint and gate the owner's custom theme file (one memo
+    slot's worth of work). Every way the file can be unusable falls back
+    to the default theme with one WARNING, never a task failure: missing,
+    rejected by the static lint, rejected by the probe-deck gate (the
+    WARNING carries the gate's message: each overflowing probe slide and
+    by how much), or unverifiable because the gate's measurement
+    infrastructure failed. An unvalidated theme is never used, and the
+    deck itself still ships."""
+    try:
+        theme = read_custom_theme(nc, path)
+    except CustomThemeError as exc:
+        _warn_rejected_custom_theme(task_id, exc)
+        return None
+    if theme is None:
+        LOGGER.warning(
+            "Task %s: theme 'custom' was requested but there is no custom "
+            "theme file at '%s'; the %s theme applies",
+            task_id,
+            path,
+            THEME_FALLBACK_FOR_CUSTOM,
+        )
+        return None
+    try:
+        gate_custom_theme(theme)
+    except CustomThemeError as exc:
+        _warn_rejected_custom_theme(task_id, exc)
+        return None
+    except _OverflowMeasurementError as exc:
+        LOGGER.warning(
+            "Task %s: the custom theme file '%s' could not be validated "
+            "(%s); the %s theme applies",
+            task_id,
+            path,
+            exc,
+            THEME_FALLBACK_FOR_CUSTOM,
+        )
+        return None
+    LOGGER.info(
+        "Task %s: theme custom uses the validated custom theme file '%s' (sha256 %s)",
+        task_id,
+        path,
+        theme.digest[:12],
+    )
+    return theme
+
+
+def _warn_rejected_custom_theme(task_id: int, exc: CustomThemeError) -> None:
+    """The one WARNING for a rejected custom theme file: the rejection
+    (which names the file and the exact reason) plus the fallback."""
+    LOGGER.warning(
+        "Task %s: %s The %s theme applies instead.",
+        task_id,
+        exc,
+        THEME_FALLBACK_FOR_CUSTOM,
+    )
+
+
+def _resolve_theme_source(
+    nc: NextcloudApp, task_id: int, theme: object, settings: Settings
+) -> ThemeSource | None:
+    """The theming resolution seam every gate and render goes through:
+    what the deck's theme needs on the marp conversion's theme slot. The
+    generated ``nextcloud`` theme gets its branding values (instance
+    theming or the owner's design tokens, :func:`_resolve_theming_values`);
+    ``custom`` gets the owner's validated custom theme
+    (:func:`_task_custom_theme`; None when there is no usable file, and a
+    ``custom`` deck then renders under marp's default-theme fallback);
+    the bundled themes need nothing."""
+    if theme == THEME_NAME:
+        return _resolve_theming_values(
+            nc, task_id, tokens_path=settings.design_tokens_path
+        )
+    if theme == CUSTOM_THEME_NAME:
+        return _task_custom_theme(nc, task_id, settings)
+    return None
+
+
 def _render_deck_file(
     nc: NextcloudApp,
     task_id: int,
@@ -2164,11 +2290,7 @@ def _render_deck_file(
     pdf render applies it, while the native PPTX build itself stays
     theme-less."""
     deck_theme = validated.frontmatter.get("theme")
-    theming_values: ThemingValues | None = None
-    if deck_theme == THEME_NAME:
-        theming_values = _resolve_theming_values(
-            nc, task_id, tokens_path=settings.design_tokens_path
-        )
+    theming_values = _resolve_theme_source(nc, task_id, deck_theme, settings)
     # the render-time fit backstop measures the deck AFTER its images
     # materialize (image-inclusive, unlike the per-slide gate) and with
     # the branded theme values a nextcloud deck needs
@@ -2227,9 +2349,9 @@ def _render_deck_file(
         else:
             if theming_values is not None:
                 LOGGER.info(
-                    "Task %s: theme nextcloud affects html/pdf only; pptx "
-                    "output ignores it",
+                    "Task %s: theme %s affects html/pdf only; pptx output ignores it",
                     task_id,
+                    deck_theme,
                 )
             LOGGER.info("Task %s: running marp HTML syntax gate", task_id)
             marp_html_gate(
@@ -2619,6 +2741,7 @@ def process_task(nc: NextcloudApp, task: Mapping[str, Any], settings: Settings) 
     # the per-task design-tokens memo dies with the task boundary: the
     # next task re-resolves the (possibly different) owner's file fresh
     _DESIGN_TOKENS_MEMO.clear()
+    _CUSTOM_THEME_MEMO.clear()
     markdown: str | None = None
     drafts = _DraftSession(enabled=settings.drafts_enabled, task_id=task_id)
     user_id: str | None = None
@@ -2713,6 +2836,12 @@ def _generate_deck(
     )
     max_slides = _validate_max_slides(task_input.get("max_slides"), settings)
     image_file_ids = validate_images_slot(task_input.get("images"))
+    # a 'custom' request is settled BEFORE any LLM spend: no usable file
+    # (absent, or rejected by the lint or the probe-deck gate, with a
+    # WARNING naming why) means the documented fallback, so the model
+    # plans and the deck ships under the default theme
+    if theme == CUSTOM_THEME_NAME and _task_custom_theme(nc, task_id, settings) is None:
+        theme = THEME_FALLBACK_FOR_CUSTOM
     resume_input = _resume_input_with_draft_file(nc, task_input, settings, task_id)
     resumed = _load_resume_draft(resume_input, theme, max_slides)
     resume_outline: DeckOutline | None = None

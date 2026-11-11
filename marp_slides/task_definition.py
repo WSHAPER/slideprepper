@@ -30,7 +30,13 @@ from nc_py_api.ex_app.providers.task_processing import (
     TaskType,
 )
 
-from .constructs import ALLOWED_THEMES, THEME_AUTO, THEME_NEXTCLOUD, THEME_VALUES
+from .constructs import (
+    ALLOWED_THEMES,
+    THEME_AUTO,
+    THEME_CUSTOM,
+    THEME_NEXTCLOUD,
+    THEME_VALUES,
+)
 from .settings import (
     EXPECTED_RUNTIME_S,
     GENERATION_OUTPUT_FORMAT_DEFAULT,
@@ -47,9 +53,11 @@ from .settings import (
 
 #: Display names for the theme ENUM slot values, derived from the
 #: constructs single source (one per THEME_VALUES entry).
-THEME_LABELS = {
-    THEME_AUTO: "Automatic: the model picks the best fit",
-} | {name: name.capitalize() for name in ALLOWED_THEMES}
+THEME_LABELS = (
+    {THEME_AUTO: "Automatic: the model picks the best fit"}
+    | {name: name.capitalize() for name in ALLOWED_THEMES}
+    | {THEME_CUSTOM: "Custom: your validated theme file"}
+)
 
 #: Description for the ``theme`` input slot (states the default, the
 #: allowed values and that the pptx output ignores the theme).
@@ -57,7 +65,12 @@ THEME_DESCRIPTION = (
     "Deck theme for the html and pdf outputs: 'nextcloud' (the default; "
     "this instance's branding), one of "
     f"{list(ALLOWED_THEMES)} to require it for the deck, or 'auto' to "
-    "let the model pick the best fit. The pptx output ignores the theme."
+    "let the model pick the best fit. 'custom' applies your own Marp theme "
+    "CSS file (by default SlidePrepper/custom-theme.css in your Files); "
+    "the file is validated against a dense probe deck first and is "
+    "rejected when normal content does not fit its slides. Without a "
+    "file, 'custom' behaves like 'default'. The pptx output ignores the "
+    "theme."
 )
 
 #: The ``output_format`` ENUM slot values, shared verbatim by both providers

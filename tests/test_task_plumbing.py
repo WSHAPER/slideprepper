@@ -24,6 +24,7 @@ import pytest
 from PIL import Image
 
 from marp_slides import task_worker
+from marp_slides.custom_theme import CustomTheme, CustomThemeError
 from marp_slides.deck_pipeline import (
     DeckError,
     _OverflowMeasurementError,
@@ -4076,3 +4077,264 @@ def test_re_authoring_after_completeness_failure_updates_draft_in_place(
     # slides, the second outline save has empty slides again
     snapshots = [dict(d.slides) for _b, d in fake_draft_store.saved]
     assert snapshots[3] == {}  # second outline completion cleared them
+
+
+# --- custom theme: the owner's validated Marp theme CSS ------------------------------
+
+#: A stock-geometry custom theme (recolor only), at the conventional path.
+CUSTOM_CSS = b'/* @theme corporate */\n@import "default";\nsection { color: #123; }\n'
+CUSTOM_PATH = "SlidePrepper/custom-theme.css"
+CUSTOM_FILE_ID = 601
+CUSTOM_OUTLINE_JSON = json.dumps(dict(OUTLINE, theme="custom"), indent=2)
+DEFAULT_OUTLINE_JSON = json.dumps(dict(OUTLINE, theme="default"), indent=2)
+CUSTOM_TASK = dict(
+    TASK, input={"prompt": "x", "theme": "custom", "output_format": "html"}
+)
+
+
+def custom_files(content: bytes = CUSTOM_CSS, path: str = CUSTOM_PATH) -> FakeFilesAPI:
+    """The owner's Files with a custom theme node at ``path``."""
+    return FakeFilesAPI(
+        blobs={CUSTOM_FILE_ID: content},
+        by_path_nodes={path: SimpleNamespace(is_dir=False, file_id=CUSTOM_FILE_ID)},
+    )
+
+
+def record_gate(monkeypatch, error: Exception | None = None) -> list[CustomTheme]:
+    """Fake the probe-deck gate at the worker's facade import; records
+    every theme it was asked to validate."""
+    gated: list[CustomTheme] = []
+
+    def fake_gate(theme: CustomTheme) -> None:
+        gated.append(theme)
+        if error is not None:
+            raise error
+
+    monkeypatch.setattr(task_worker, "gate_custom_theme", fake_gate)
+    return gated
+
+
+def test_custom_theme_rides_every_gate_and_render(monkeypatch, settings) -> None:
+    """theme=custom with a file that passes the gate: the per-slide
+    measurement, the deck backstop and the render all receive the SAME
+    linted CustomTheme (one theming seam), the file is read and gated
+    once per task, and the shipped source names the custom theme."""
+    fake, _calls = deck_scheduler(outline_json=CUSTOM_OUTLINE_JSON)
+    monkeypatch.setattr(task_worker, "schedule_and_wait", fake)
+    gated = record_gate(monkeypatch)
+    slide_sources: list[object] = []
+    deck_sources: list[object] = []
+
+    def slide_measure(md, wd, **kw):
+        slide_sources.append(kw.get("theming_values"))
+
+    def deck_measure(md, wd, **kw):
+        deck_sources.append(kw.get("theming_values"))
+        return ()
+
+    monkeypatch.setattr(task_worker, "measure_slide_overflow", slide_measure)
+    monkeypatch.setattr(task_worker, "measure_deck_overflow", deck_measure)
+    seen = capture_theming_render(monkeypatch)
+    files = custom_files()
+    nc, api = make_fake_nc(files=files)
+    task_worker.process_task(nc, CUSTOM_TASK, settings)
+    (result,) = api.results
+    assert result["output"] == SUCCESS_OUTPUT
+    theme = seen["theming_values"]
+    assert isinstance(theme, CustomTheme)
+    assert theme.path == CUSTOM_PATH
+    assert "@theme custom" in theme.css
+    assert gated == [theme]
+    assert slide_sources == [theme] * 3
+    assert deck_sources and all(source == theme for source in deck_sources)
+    assert files.looked_up.count(CUSTOM_PATH) == 1
+    assert files.downloaded.count(CUSTOM_FILE_ID) == 1
+    assert b"theme: custom" in api.uploads[1][1][1]
+
+
+def test_rejected_custom_theme_falls_back_to_default_with_a_warning(
+    monkeypatch, settings, caplog
+) -> None:
+    """A theme the probe gate rejects is never applied, and never fails
+    the task either: one WARNING carries the gate's message (probe slide,
+    overflow amount), the model is asked for the default theme, and the
+    deck ships under it with no theme payload."""
+    fake, calls = deck_scheduler(outline_json=DEFAULT_OUTLINE_JSON)
+    monkeypatch.setattr(task_worker, "schedule_and_wait", fake)
+    rejection = CustomThemeError(
+        "The custom theme file 'SlidePrepper/custom-theme.css' was rejected: "
+        "normal content does not fit its slides.\n- probe slide 4 (a table "
+        "with full-width rows): 641 px of content in a 563 px safe area, 78 "
+        "px over"
+    )
+    gated = record_gate(monkeypatch, rejection)
+    seen = capture_theming_render(monkeypatch)
+    nc, api = make_fake_nc(files=custom_files())
+    with caplog.at_level("WARNING", logger="marp_slides.task_worker"):
+        task_worker.process_task(nc, CUSTOM_TASK, settings)
+    (result,) = api.results
+    assert result["output"] == SUCCESS_OUTPUT
+    assert len(gated) == 1
+    assert seen["theming_values"] is None
+    assert "requires the 'default' theme" in json.dumps(calls[0])
+    assert b"theme: default" in api.uploads[1][1][1]
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    rejected = [m for m in warnings if "probe slide 4" in m]
+    assert len(rejected) == 1
+    assert "78 px over" in rejected[0]
+    assert "The default theme applies instead." in rejected[0]
+
+
+def test_lint_rejected_custom_theme_falls_back_without_rendering(
+    monkeypatch, settings, caplog
+) -> None:
+    """A file that fails the static lint never reaches the probe render;
+    the deck falls back to the default theme with the lint reason logged."""
+    fake, _calls = deck_scheduler(outline_json=DEFAULT_OUTLINE_JSON)
+    monkeypatch.setattr(task_worker, "schedule_and_wait", fake)
+    gated = record_gate(monkeypatch)
+    seen = capture_theming_render(monkeypatch)
+    hostile = b"section { background: url(http://169.254.169.254/latest); }"
+    nc, api = make_fake_nc(files=custom_files(hostile))
+    with caplog.at_level("WARNING", logger="marp_slides.task_worker"):
+        task_worker.process_task(nc, CUSTOM_TASK, settings)
+    (result,) = api.results
+    assert result["output"] == SUCCESS_OUTPUT
+    assert gated == []
+    assert seen["theming_values"] is None
+    assert any(
+        "references an external resource" in r.getMessage() for r in caplog.records
+    )
+
+
+def test_custom_without_a_file_falls_back_to_default(
+    monkeypatch, settings, caplog
+) -> None:
+    """No theme file: never a task failure. One WARNING names the path,
+    the model is asked for the default theme, and the deck ships under
+    it with no theme payload at all."""
+    fake, calls = deck_scheduler(outline_json=DEFAULT_OUTLINE_JSON)
+    monkeypatch.setattr(task_worker, "schedule_and_wait", fake)
+    gated = record_gate(monkeypatch)
+    seen = capture_theming_render(monkeypatch)
+    nc, api = make_fake_nc(files=FakeFilesAPI())
+    with caplog.at_level("WARNING", logger="marp_slides.task_worker"):
+        task_worker.process_task(nc, CUSTOM_TASK, settings)
+    (result,) = api.results
+    assert result["output"] == SUCCESS_OUTPUT
+    assert gated == []
+    assert seen["theming_values"] is None
+    assert "requires the 'default' theme" in json.dumps(calls[0])
+    assert b"theme: default" in api.uploads[1][1][1]
+    warnings = [r.getMessage() for r in caplog.records]
+    assert sum("no custom theme file" in m and CUSTOM_PATH in m for m in warnings) == 1
+
+
+def test_unverifiable_custom_theme_falls_back_to_default(
+    monkeypatch, settings, caplog
+) -> None:
+    """The gate cannot run (no Chromium): an unvalidated theme is never
+    used, so the task falls back to the default theme with a WARNING."""
+    fake, _calls = deck_scheduler(outline_json=DEFAULT_OUTLINE_JSON)
+    monkeypatch.setattr(task_worker, "schedule_and_wait", fake)
+    record_gate(monkeypatch, _OverflowMeasurementError("no Chromium was found"))
+    seen = capture_theming_render(monkeypatch)
+    nc, api = make_fake_nc(files=custom_files())
+    with caplog.at_level("WARNING", logger="marp_slides.task_worker"):
+        task_worker.process_task(nc, CUSTOM_TASK, settings)
+    (result,) = api.results
+    assert result["output"] == SUCCESS_OUTPUT
+    assert seen["theming_values"] is None
+    assert any("could not be validated" in r.getMessage() for r in caplog.records)
+
+
+def test_custom_theme_knob_path_overrides_the_default(monkeypatch, settings) -> None:
+    fake, _calls = deck_scheduler(outline_json=CUSTOM_OUTLINE_JSON)
+    monkeypatch.setattr(task_worker, "schedule_and_wait", fake)
+    record_gate(monkeypatch)
+    seen = capture_theming_render(monkeypatch)
+    files = custom_files(path="Org/brand.css")
+    nc, api = make_fake_nc(files=files)
+    task_worker.process_task(
+        nc, CUSTOM_TASK, replace(settings, custom_theme_path="Org/brand.css")
+    )
+    (result,) = api.results
+    assert result["output"] == SUCCESS_OUTPUT
+    assert isinstance(seen["theming_values"], CustomTheme)
+    assert CUSTOM_PATH not in files.looked_up
+
+
+def test_other_themes_never_read_the_custom_theme_file(monkeypatch, settings) -> None:
+    """A custom theme file is opt-in: a nextcloud or bundled deck never
+    looks it up (no DAV read, no gate render)."""
+    fake, _calls = nc_deck_scheduler()
+    monkeypatch.setattr(task_worker, "schedule_and_wait", fake)
+    gated = record_gate(monkeypatch)
+    files = custom_files()
+    nc, api = make_fake_nc(files=files)
+    task_worker.process_task(nc, TASK, settings)
+    (result,) = api.results
+    assert result["output"] == SUCCESS_OUTPUT
+    assert CUSTOM_PATH not in files.looked_up
+    assert gated == []
+
+
+def _custom_re_render(monkeypatch, settings, files_extra_path: bool):
+    deck = VALID_DECK.replace("theme: default", "theme: custom")
+    content = deck.encode("utf-8")
+    by_path = (
+        {CUSTOM_PATH: SimpleNamespace(is_dir=False, file_id=CUSTOM_FILE_ID)}
+        if files_extra_path
+        else {}
+    )
+    files = FakeFilesAPI(
+        {303: md_node(303, content, "Quarterly-Review.md")},
+        {303: content, CUSTOM_FILE_ID: CUSTOM_CSS},
+        by_path,
+    )
+    nc, api = make_fake_nc(files=files)
+    seen = capture_theming_render(monkeypatch)
+    task_worker.process_task(
+        nc,
+        re_render_task({"deck_source_file": 303, "output_format": "html"}),
+        settings,
+    )
+    return api, seen
+
+
+def test_re_render_custom_deck_applies_the_validated_theme(
+    monkeypatch, settings
+) -> None:
+    """The re-render task resolves 'theme: custom' through the same seam."""
+    gated = record_gate(monkeypatch)
+    api, seen = _custom_re_render(monkeypatch, settings, files_extra_path=True)
+    (result,) = api.results
+    assert result["output"] == SUCCESS_OUTPUT
+    assert isinstance(seen["theming_values"], CustomTheme)
+    assert len(gated) == 1
+
+
+def test_re_render_custom_deck_without_a_file_renders_like_default(
+    monkeypatch, settings, caplog
+) -> None:
+    """The file is gone: the deck still renders (marp's own fallback for
+    an unregistered 'custom' name is the default theme), with a WARNING."""
+    record_gate(monkeypatch)
+    with caplog.at_level("WARNING", logger="marp_slides.task_worker"):
+        api, seen = _custom_re_render(monkeypatch, settings, files_extra_path=False)
+    (result,) = api.results
+    assert result["output"] == SUCCESS_OUTPUT
+    assert seen["theming_values"] is None
+    assert any("no custom theme file" in r.getMessage() for r in caplog.records)
+
+
+def test_re_render_custom_deck_with_a_rejected_theme_renders_like_default(
+    monkeypatch, settings, caplog
+) -> None:
+    record_gate(monkeypatch, CustomThemeError("rejected: probe slide 1"))
+    with caplog.at_level("WARNING", logger="marp_slides.task_worker"):
+        api, seen = _custom_re_render(monkeypatch, settings, files_extra_path=True)
+    (result,) = api.results
+    assert result["output"] == SUCCESS_OUTPUT
+    assert seen["theming_values"] is None
+    assert any("probe slide 1" in r.getMessage() for r in caplog.records)

@@ -110,3 +110,14 @@ def test_design_tokens_path_round_trip(monkeypatch) -> None:
     assert Settings.from_env().design_tokens_path == "SlidePrepper/design-tokens.json"
     monkeypatch.delenv("SLIDEPREPPER_DESIGN_TOKENS_PATH")
     assert Settings.from_env().design_tokens_path == "SlidePrepper/design-tokens.json"
+
+
+def test_custom_theme_path_round_trip(monkeypatch) -> None:
+    """The custom theme path parses from env like the tokens path:
+    stripped, with empty falling back to the conventional default."""
+    monkeypatch.setenv("SLIDEPREPPER_CUSTOM_THEME_PATH", "  Branding/theme.css  ")
+    assert Settings.from_env().custom_theme_path == "Branding/theme.css"
+    monkeypatch.setenv("SLIDEPREPPER_CUSTOM_THEME_PATH", "")
+    assert Settings.from_env().custom_theme_path == "SlidePrepper/custom-theme.css"
+    monkeypatch.delenv("SLIDEPREPPER_CUSTOM_THEME_PATH")
+    assert Settings.from_env().custom_theme_path == "SlidePrepper/custom-theme.css"

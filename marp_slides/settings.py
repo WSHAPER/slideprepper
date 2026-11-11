@@ -129,6 +129,13 @@ DEFAULT_DELIVERIES_FOLDER = "SlidePrepper"
 #: off switch.
 DEFAULT_DESIGN_TOKENS_PATH = "SlidePrepper/design-tokens.json"
 
+#: Owner-relative path of the custom Marp theme CSS a task applies when
+#: its theme input is ``custom`` (see the README's "Custom theme"). It
+#: rides the same folder convention as the design tokens. A missing file
+#: makes ``custom`` behave like ``default``; '-' or 'off' disables custom
+#: themes instance-wide.
+DEFAULT_CUSTOM_THEME_PATH = "SlidePrepper/custom-theme.css"
+
 #: How long a read-through of the admin appconfig stays fresh: a value an
 #: admin saves (declarative settings UI or occ) applies to tasks claimed
 #: at least this long after the save, without a restart.
@@ -207,6 +214,7 @@ class Settings:
     drafts_max_kept: int = DEFAULT_DRAFTS_MAX_KEPT
     deliveries_folder: str = DEFAULT_DELIVERIES_FOLDER
     design_tokens_path: str = DEFAULT_DESIGN_TOKENS_PATH
+    custom_theme_path: str = DEFAULT_CUSTOM_THEME_PATH
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
@@ -251,6 +259,8 @@ class Settings:
             or DEFAULT_DELIVERIES_FOLDER,
             design_tokens_path=env.get("SLIDEPREPPER_DESIGN_TOKENS_PATH", "").strip()
             or DEFAULT_DESIGN_TOKENS_PATH,
+            custom_theme_path=env.get("SLIDEPREPPER_CUSTOM_THEME_PATH", "").strip()
+            or DEFAULT_CUSTOM_THEME_PATH,
         )
 
 
@@ -374,6 +384,21 @@ ADMIN_CONFIG_KNOBS: tuple[AdminConfigKnob, ...] = (
             "back to the instance theming, never a task failure. Set to "
             "'-' or 'off' to disable design tokens instance-wide. "
             "Default: SlidePrepper/design-tokens.json."
+        ),
+    ),
+    AdminConfigKnob(
+        key="SLIDEPREPPER_CUSTOM_THEME_PATH",
+        attribute="custom_theme_path",
+        kind="str",
+        label="Custom theme file path",
+        description=(
+            "Path of the custom Marp theme CSS (relative to the requesting "
+            "user's Files root) applied when a task asks for the 'custom' "
+            "theme. The file is validated against a dense probe deck "
+            "before use and rejected when normal content does not fit; "
+            "without a file, 'custom' behaves like 'default'. Set to '-' "
+            "or 'off' to disable custom themes instance-wide. "
+            "Default: SlidePrepper/custom-theme.css."
         ),
     ),
 )

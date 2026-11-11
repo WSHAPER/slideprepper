@@ -45,6 +45,7 @@ from .constructs import (
     MARP_THEMES,
     SUPPORTED_CONSTRUCTS,
     THEME_AUTO,
+    THEME_CUSTOM,
     UnsupportedConstructError,
     validate_background_image_reference,
     validate_hex_color,
@@ -171,6 +172,20 @@ THEME_DENSITY: dict[str, str] = {
         "costs two. Subheadings are expensive: at most TWO per slide, and "
         "each one reduces the remaining bullet budget by two lines (a slide "
         "with two subheadings fits only 3 or 4 bullets total)."
+    ),
+    # a custom theme is held to the default theme's density: the probe-deck
+    # gate (marp_slides.custom_theme) rejects any theme on which content
+    # written to this clause overflows, so the teaching stays truthful
+    "custom": (
+        "the title plus at most about 9 single lines of text fill a slide "
+        "completely (a safe area of about 563 px at about 44 px per line). "
+        "Count every line a bullet WRAPS to, not the bullet count, and count "
+        "a subheading ('###') as a line too: aim for 4 to 6 bullets, each "
+        "short enough to fit on ONE line of about 70 characters; a bullet "
+        "that wraps to two lines costs two. Subheadings are expensive: at "
+        "most TWO per slide, and each one reduces the remaining bullet "
+        "budget by two lines (a slide with two subheadings fits only 3 or 4 "
+        "bullets total)."
     ),
     "uncover": (
         "this theme's type is the largest, so the least fits: the title "
@@ -544,7 +559,15 @@ def validate_outline_theme(outline: DeckOutline, theme: str) -> None:
     """Enforce a non-auto ``theme`` task input against the plan: the
     outline's theme must equal the user's hard requirement. A mismatch
     raises a normal retryable DeckError (an output-quality failure the
-    model can correct); ``auto`` never constrains the pick."""
+    model can correct); ``auto`` never constrains the pick among the
+    MARP_THEMES, but it never unlocks the opt-in ``custom`` theme: only
+    a task that asked for it may plan with it."""
+    if outline.theme == THEME_CUSTOM and theme != THEME_CUSTOM:
+        raise DeckError(
+            f"Invalid outline: the theme '{THEME_CUSTOM}' is only available "
+            "when the user requests it. Pick one of the listed deck themes "
+            'and write its name into the JSON "theme" key.'
+        )
     if theme not in (THEME_AUTO, outline.theme):
         raise DeckError(
             f"Invalid outline: the user requires theme '{theme}' but the outline "

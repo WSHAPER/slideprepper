@@ -302,8 +302,8 @@ def _reject_unknown_keys(frontmatter: dict[str, Any]) -> None:
 def _reject_bad_theme(theme: object) -> None:
     if theme is not None and theme not in ALLOWED_THEMES:
         raise DeckError(
-            f"Invalid deck: theme {theme!r} is not supported; use one of the three "
-            f"themes bundled with Marp: {list(ALLOWED_THEMES)}."
+            f"Invalid deck: theme {theme!r} is not supported; use one of "
+            f"{list(ALLOWED_THEMES)}."
         )
 
 

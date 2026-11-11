@@ -64,6 +64,11 @@
 				<description>Optional. Environment fallback for the admin setting of the same name (Administration settings, ExApps Settings). Path, relative to the requesting user's Files root, of the design tokens JSON whose colors and font re-brand the nextcloud theme for that user's decks; a folder mounted at the same path for every user (for example a group folder) can be pointed at here. A missing or malformed file falls back to the instance theming. Set to '-' or 'off' to disable design tokens instance-wide. Default: SlidePrepper/design-tokens.json.</description>
 			</variable>
 			<variable>
+				<name>SLIDEPREPPER_CUSTOM_THEME_PATH</name>
+				<display-name>Custom theme file path</display-name>
+				<description>Optional. Environment fallback for the admin setting of the same name (Administration settings, ExApps Settings). Path, relative to the requesting user's Files root, of the custom Marp theme CSS applied when a task asks for the 'custom' theme. The file is validated against a dense probe deck before use and rejected when normal content does not fit; without a file, 'custom' behaves like 'default'. Set to '-' or 'off' to disable custom themes instance-wide. Default: SlidePrepper/custom-theme.css.</description>
+			</variable>
+			<variable>
 				<name>SLIDEPREPPER_POLL_INTERVAL</name>
 				<display-name>Task poll interval (seconds)</display-name>
 				<description>Optional. How often the ExApp polls Nextcloud for new slide deck tasks when no trigger event has arrived. Not admin-manageable (worker loop cadence). Default: 5.</description>

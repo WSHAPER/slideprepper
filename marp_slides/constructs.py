@@ -210,8 +210,17 @@ MARP_THEMES: tuple[tuple[str, str], ...] = (
     ),
 )
 
-#: Allowed frontmatter theme values (the MARP_THEMES names).
-ALLOWED_THEMES = tuple(name for name, _description in MARP_THEMES)
+#: The owner-supplied custom theme: a Marp theme CSS file in the task
+#: owner's Files that passed the probe-deck geometry gate (see
+#: :mod:`marp_slides.custom_theme`, ``custom_theme.CUSTOM_THEME_NAME`` must
+#: match). Deliberately NOT a MARP_THEMES entry: that list is what 'auto'
+#: lets the model pick from, and a custom theme is opt-in only (the task
+#: input names it, never the model's own choice).
+THEME_CUSTOM = "custom"
+
+#: Allowed frontmatter theme values: the MARP_THEMES names plus the
+#: opt-in custom theme.
+ALLOWED_THEMES = (*(name for name, _description in MARP_THEMES), THEME_CUSTOM)
 
 #: Accepted ``theme`` task-input values: ``auto`` plus the theme names.
 THEME_VALUES = (THEME_AUTO, *ALLOWED_THEMES)

@@ -8,7 +8,10 @@ same safety flags, so no output format can ever be looser than the gate.
 The instance-branded ``nextcloud`` theme CSS rides all three paths the
 same way: when theming values are available and the deck's frontmatter
 theme is ``nextcloud``, the theme CSS is generated into the workdir and
-registered with ``--theme-set`` (see :func:`_marp_convert`).
+registered with ``--theme-set`` (see :func:`_marp_convert`). An
+owner-supplied custom theme rides the same slot and the same flag: a
+``custom``-themed deck gets the linted custom CSS written into the
+workdir (see :mod:`marp_slides.custom_theme`).
 The one deliberate per-invocation difference: render conversions whose
 deck images were materialized into the workdir pass
 ``--allow-local-files`` (see :func:`_marp_convert` for the containment
@@ -39,6 +42,12 @@ from pathlib import Path
 
 import yaml
 
+from .custom_theme import (
+    CUSTOM_THEME_NAME,
+    CustomTheme,
+    ThemeSource,
+    write_custom_theme_css,
+)
 from .layout import SlideOverflow
 from .slide_blocks import FENCE_OPEN_RE
 from .theming import THEME_NAME, ThemingValues, write_theme_css
@@ -101,7 +110,7 @@ def marp_html_gate(
     marp_timeout_s: int = 120,
     marp_bin: str = "marp",
     runner: Runner = subprocess.run,
-    theming_values: ThemingValues | None = None,
+    theming_values: ThemeSource | None = None,
 ) -> None:
     """Run the marp HTML syntax gate (browserless) on a validated deck.
 
@@ -132,7 +141,7 @@ def render_deck_html(
     marp_bin: str = "marp",
     runner: Runner = subprocess.run,
     allow_local_files: bool = False,
-    theming_values: ThemingValues | None = None,
+    theming_values: ThemeSource | None = None,
 ) -> bytes:
     """Render a validated deck to the deliverable standalone HTML file
     (browserless: Node only, no Chromium is spawned, verified empirically
@@ -173,7 +182,7 @@ def render_deck_pdf(
     marp_bin: str = "marp",
     runner: Runner = subprocess.run,
     allow_local_files: bool = False,
-    theming_values: ThemingValues | None = None,
+    theming_values: ThemeSource | None = None,
 ) -> bytes:
     """Render a validated deck to the deliverable PDF document.
 
@@ -212,7 +221,7 @@ def measure_slide_overflow(
     markdown: str,
     workdir: Path,
     *,
-    theming_values: ThemingValues | None = None,
+    theming_values: ThemeSource | None = None,
 ) -> SlideOverflow | None:
     """Measure one slide's Marp Markdown for overflow (both axes).
 
@@ -265,7 +274,7 @@ def measure_deck_overflow(
     markdown: str,
     workdir: Path,
     *,
-    theming_values: ThemingValues | None = None,
+    theming_values: ThemeSource | None = None,
 ) -> tuple[SlideOverflow, ...]:
     """Measure a whole deck's Marp Markdown for overflow (both axes).
 
@@ -307,7 +316,7 @@ def _marp_convert(  # noqa: PLR0913 - the single conversion path: 7 fixed
     out_name: str,
     *,
     allow_local_files: bool = False,
-    theming_values: ThemingValues | None = None,
+    theming_values: ThemeSource | None = None,
 ) -> bytes:
     """Shared strict marp-cli conversion step (Node-only for HTML output;
     ``.pdf`` additionally drives the bundled Chromium via puppeteer-core).
@@ -326,7 +335,13 @@ def _marp_convert(  # noqa: PLR0913 - the single conversion path: 7 fixed
     via ``--theme-set`` so the frontmatter theme name resolves to it. All
     three call paths (gate, HTML, PDF) apply it identically, keeping the
     parity contract; a deck under a built-in theme (or absent theming
-    values) converts exactly as before: no theme file, no flag.
+    values) converts exactly as before: no theme file, no flag. The same
+    slot carries a :class:`~marp_slides.custom_theme.CustomTheme` for a
+    ``custom``-themed deck (its linted CSS written as
+    ``custom-theme.css``, same flag); a ``custom`` deck WITHOUT one
+    renders under marp's own fallback, the default theme (marp-cli exits
+    0 on an unknown theme name and emits default-theme CSS), which is
+    exactly the documented 'custom without a file behaves like default'.
 
     ``allow_local_files`` appends ``--allow-local-files`` (the flag governs
     reading local files into the deck, not writing the output; verified
@@ -360,8 +375,8 @@ def _marp_convert(  # noqa: PLR0913 - the single conversion path: 7 fixed
         str(marprc_path),
         "--no-html",
     ]
-    if theming_values is not None and _deck_theme(markdown) == THEME_NAME:
-        theme_css_path = write_theme_css(theming_values, workdir)
+    theme_css_path = _write_theme_source(theming_values, markdown, workdir)
+    if theme_css_path is not None:
         argv += ["--theme-set", str(theme_css_path)]
     if allow_local_files:
         argv.append("--allow-local-files")
@@ -372,6 +387,24 @@ def _marp_convert(  # noqa: PLR0913 - the single conversion path: 7 fixed
             f"Marp output:\n{_excerpt(result)}"
         )
     return out_path.read_bytes()
+
+
+def _write_theme_source(
+    source: ThemeSource | None, markdown: str, workdir: Path
+) -> Path | None:
+    """Write the theme CSS a conversion needs into ``workdir`` and return
+    its path for ``--theme-set``, or None when the deck needs none. A
+    source applies only to the deck theme it is for (branded values to a
+    ``nextcloud`` deck, a custom theme to a ``custom`` deck); any other
+    pairing converts without a theme file, as before."""
+    if source is None:
+        return None
+    theme = _deck_theme(markdown)
+    if isinstance(source, ThemingValues) and theme == THEME_NAME:
+        return write_theme_css(source, workdir)
+    if isinstance(source, CustomTheme) and theme == CUSTOM_THEME_NAME:
+        return write_custom_theme_css(source, workdir)
+    return None
 
 
 def _run_marp(
@@ -456,7 +489,7 @@ class _SectionMetrics:
 
 
 def _measure_overflow_reports(
-    markdown: str, workdir: Path, theming_values: ThemingValues | None = None
+    markdown: str, workdir: Path, theming_values: ThemeSource | None = None
 ) -> tuple[SlideOverflow, ...]:
     """The shared pipeline behind both public drivers: strict marp render
     to HTML, measurement-copy injection, one headless Chromium --dump-dom

@@ -15,6 +15,7 @@ from marp_slides.settings import (
     ADMIN_CONFIG_KEYS,
     ADMIN_CONFIG_KNOBS,
     ADMIN_CONFIG_REFRESH_TTL_S,
+    DEFAULT_CUSTOM_THEME_PATH,
     DEFAULT_DESIGN_TOKENS_PATH,
     DEFAULT_DRAFTS_FOLDER,
     DEFAULT_LOG_EXCERPT,
@@ -41,6 +42,7 @@ _ENV_LEVEL = {
     "SLIDEPREPPER_LOG_EXCERPT": "false",
     "SLIDEPREPPER_DRAFTS_ENABLED": "false",
     "SLIDEPREPPER_DESIGN_TOKENS_PATH": "Env Tokens/tokens.json",
+    "SLIDEPREPPER_CUSTOM_THEME_PATH": "Env Theme/theme.css",
 }
 
 _ADMIN_LEVEL = {
@@ -53,6 +55,7 @@ _ADMIN_LEVEL = {
     "SLIDEPREPPER_LOG_EXCERPT": "true",
     "SLIDEPREPPER_DRAFTS_ENABLED": "true",
     "SLIDEPREPPER_DESIGN_TOKENS_PATH": "Admin Tokens/tokens.json",
+    "SLIDEPREPPER_CUSTOM_THEME_PATH": "Admin Theme/theme.css",
 }
 
 #: The expected effective value per knob per precedence level (attribute
@@ -74,6 +77,11 @@ _EXPECTED = {
         DEFAULT_DESIGN_TOKENS_PATH,
         "Env Tokens/tokens.json",
         "Admin Tokens/tokens.json",
+    ),
+    "custom_theme_path": (
+        DEFAULT_CUSTOM_THEME_PATH,
+        "Env Theme/theme.css",
+        "Admin Theme/theme.css",
     ),
 }
 
@@ -149,7 +157,7 @@ def test_admin_bool_falsy_tokens(token: str) -> None:
 
 
 def test_surfaced_keys_are_exactly_the_operational_knob_set() -> None:
-    """The surfaced set is pinned: the nine operational knobs, nothing
+    """The surfaced set is pinned: the operational knobs below, nothing
     more. A knob joining or leaving the surface must be a deliberate
     change to this list."""
     assert ADMIN_CONFIG_KEYS == (
@@ -162,6 +170,7 @@ def test_surfaced_keys_are_exactly_the_operational_knob_set() -> None:
         "SLIDEPREPPER_LOG_EXCERPT",
         "SLIDEPREPPER_DRAFTS_ENABLED",
         "SLIDEPREPPER_DESIGN_TOKENS_PATH",
+        "SLIDEPREPPER_CUSTOM_THEME_PATH",
     )
 
 

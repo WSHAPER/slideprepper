@@ -11,19 +11,36 @@ its module; the html/pdf renders composed here with the image
 materialization from :mod:`marp_slides.images`), and output file naming.
 The worker drives these pieces; nothing here knows about tasks or
 Nextcloud.
+
+The custom theme gatekeeper (:func:`gate_custom_theme`) lives here too:
+it drives the marp render and the Chromium measurement of the static
+probe deck, which only this facade may import (the app layer never
+touches :mod:`marp_slides.marp_cli` directly).
 """
 
 from __future__ import annotations
 
+import logging
 import re
 import subprocess
+import tempfile
+import time
+from collections import OrderedDict
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from .constructs import THEME_AUTO, THEME_NEXTCLOUD, THEME_VALUES
+from .custom_theme import (
+    PROBE_DECK,
+    CustomTheme,
+    ThemeSource,
+    probe_blocking,
+    probe_rejection,
+)
 from .determinism import normalize_pdf
 from .images import materialize_image_files
+from .layout import SlideOverflow
 from .marp_cli import (
     MARPRC_CONTENT,
     Runner,
@@ -36,7 +53,6 @@ from .marp_cli import render_deck_html as marp_render_html
 from .marp_cli import render_deck_pdf as marp_render_pdf
 from .outline import _deck_themes_section, _load_prompt, _supported_constructs_section
 from .settings import OUTPUT_FORMAT_VALUES
-from .theming import ThemingValues
 from .validator import (
     DeckError,
     ValidatedDeck,
@@ -56,6 +72,7 @@ __all__ = [
     "build_llm_prompt",
     "count_slides",
     "extract_markdown",
+    "gate_custom_theme",
     "marp_html_gate",
     "measure_deck_overflow",
     "measure_slide_overflow",
@@ -195,9 +212,9 @@ def validate_theme(value: object, allowed: tuple[str, ...] = THEME_VALUES) -> st
         THEME_NEXTCLOUD,
         allowed,
         "theme",
-        "Only the three themes bundled with Marp and the instance-branded "
-        "nextcloud theme are supported; 'auto' lets the model pick the "
-        "best fit.",
+        "Only the three themes bundled with Marp, the instance-branded "
+        "nextcloud theme and your validated custom theme file are "
+        "supported; 'auto' lets the model pick the best fit.",
     )
 
 
@@ -219,6 +236,70 @@ def validate_theme_override(frontmatter: Mapping[str, Any], theme: str) -> None:
     )
 
 
+# --- the custom theme gatekeeper ---------------------------------------------
+
+LOGGER = logging.getLogger("marp_slides.deck_pipeline")
+
+#: The gate's verdict cache: the SHA-256 of a custom theme file's raw
+#: bytes -> the blocking probe reports (an empty tuple: the theme passed).
+#: The gate is deterministic for a given CSS and toolchain, so the content
+#: digest is a complete key: an unchanged file never re-renders the probe,
+#: and ANY edit (a new digest) re-validates. In-memory and bounded (LRU):
+#: the toolchain changes only with an image upgrade, which restarts the
+#: process and empties the cache with it. Infrastructure failures are
+#: never cached, so a transient Chromium problem cannot pin a verdict.
+_CUSTOM_THEME_VERDICTS: OrderedDict[str, tuple[SlideOverflow, ...]] = OrderedDict()
+_CUSTOM_THEME_VERDICTS_MAX = 32
+
+
+def gate_custom_theme(theme: CustomTheme) -> None:
+    """The custom theme gatekeeper: render the static probe deck
+    (:data:`marp_slides.custom_theme.PROBE_DECK`) under ``theme`` through
+    the same strict marp conversion and ``--theme-set`` mechanism every
+    render uses, measure every slide with the same headless Chromium
+    script and pixel budgets as the overflow gates
+    (:func:`measure_deck_overflow`), and reject the theme when any probe
+    slide overflows by more than one rendered line. No LLM is involved:
+    static content, marp, Chromium, pixel math.
+
+    Returns None when the theme passes. Raises
+    :class:`~marp_slides.custom_theme.CustomThemeError` naming every
+    blocking probe slide when it does not, and lets the measurement's
+    infrastructure :class:`DeckError` subclass through untouched (and
+    uncached) when the gate cannot run at all; the caller decides what an
+    unverifiable theme means. Verdicts are cached by the file's content
+    digest (see :data:`_CUSTOM_THEME_VERDICTS`)."""
+    blocking = _CUSTOM_THEME_VERDICTS.get(theme.digest)
+    if blocking is None:
+        started = time.monotonic()
+        with tempfile.TemporaryDirectory(prefix="marp_slides-theme-gate-") as workdir:
+            reports = measure_deck_overflow(
+                PROBE_DECK, Path(workdir), theming_values=theme
+            )
+        blocking = probe_blocking(reports)
+        LOGGER.info(
+            "custom theme gate for '%s' (sha256 %s): %s in %.2f s",
+            theme.path,
+            theme.digest[:12],
+            f"rejected ({len(blocking)} probe slide(s) overflow)"
+            if blocking
+            else "passed",
+            time.monotonic() - started,
+        )
+        _CUSTOM_THEME_VERDICTS[theme.digest] = blocking
+        while len(_CUSTOM_THEME_VERDICTS) > _CUSTOM_THEME_VERDICTS_MAX:
+            _CUSTOM_THEME_VERDICTS.popitem(last=False)
+    else:
+        _CUSTOM_THEME_VERDICTS.move_to_end(theme.digest)
+        LOGGER.debug(
+            "custom theme gate for '%s' (sha256 %s): cached verdict",
+            theme.path,
+            theme.digest[:12],
+        )
+    if blocking:
+        raise probe_rejection(theme.path, blocking)
+
+
 # --- marp renders: compose image materialization ------------------------------
 
 
@@ -229,7 +310,7 @@ def render_deck_html(
     marp_bin: str = "marp",
     runner: Runner = subprocess.run,
     image_blobs: Mapping[int, bytes] | None = None,
-    theming_values: ThemingValues | None = None,
+    theming_values: ThemeSource | None = None,
 ) -> bytes:
     """Render a validated deck to the deliverable standalone HTML file
     (browserless: Node only). When ``image_blobs`` carries the deck's
@@ -267,7 +348,7 @@ def render_deck_pdf(
     marp_bin: str = "marp",
     runner: Runner = subprocess.run,
     image_blobs: Mapping[int, bytes] | None = None,
-    theming_values: ThemingValues | None = None,
+    theming_values: ThemeSource | None = None,
 ) -> bytes:
     """Render a validated deck to the deliverable PDF document (Chromium
     via puppeteer-core). Images materialize into ``workdir`` exactly as in

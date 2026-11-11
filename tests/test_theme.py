@@ -14,6 +14,7 @@ from marp_slides.constructs import (
     ALLOWED_THEMES,
     MARP_THEMES,
     THEME_AUTO,
+    THEME_CUSTOM,
     THEME_NEXTCLOUD,
     THEME_VALUES,
 )
@@ -99,7 +100,11 @@ def test_system_prompt_instructs_the_pick_into_the_frontmatter() -> None:
 
 
 def test_theme_values_stay_consistent_with_the_theme_list() -> None:
-    assert tuple(name for name, _description in MARP_THEMES) == ALLOWED_THEMES
+    # the opt-in custom theme is allowed in the frontmatter and the task
+    # input, but it is NOT a MARP_THEMES entry ('auto' never offers it)
+    marp_names = tuple(name for name, _description in MARP_THEMES)
+    assert (*marp_names, THEME_CUSTOM) == ALLOWED_THEMES
+    assert THEME_CUSTOM not in marp_names
     assert (THEME_AUTO, *ALLOWED_THEMES) == THEME_VALUES
     # the instance-branded theme is a first-class member: the default task
     # input and the generated theme (theming.THEME_NAME) both name it
@@ -119,3 +124,16 @@ def test_override_prompt_states_the_requirement_after_the_rules() -> None:
     assert "theme: gaia" in prompt
     # the requirement lands after the theme list it overrides
     assert prompt.index("requires the 'gaia' theme") > prompt.index("Deck themes")
+
+
+def test_custom_theme_is_an_accepted_input_and_matches_the_module_name() -> None:
+    """'custom' is a theme ENUM value; its name is the one the custom
+    theme CSS registers under --theme-set (custom_theme.CUSTOM_THEME_NAME)."""
+    from marp_slides.custom_theme import CUSTOM_THEME_NAME
+
+    assert validate_theme("custom") == THEME_CUSTOM == CUSTOM_THEME_NAME
+    assert THEME_CUSTOM in THEME_VALUES
+
+
+def test_system_prompt_never_offers_the_custom_theme_to_auto() -> None:
+    assert f"- {THEME_CUSTOM}:" not in DECK_SYSTEM_PROMPT

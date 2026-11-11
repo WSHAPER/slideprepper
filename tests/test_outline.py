@@ -7,6 +7,7 @@ no Nextcloud I/O)."""
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -239,6 +240,22 @@ def test_validate_outline_theme() -> None:
     assert validate_outline_theme(TWO_SLIDE_OUTLINE, "default") is None
     with pytest.raises(DeckError, match="requires theme 'gaia'"):
         validate_outline_theme(TWO_SLIDE_OUTLINE, "gaia")
+
+
+def test_outline_theme_custom_only_when_the_task_asks_for_it() -> None:
+    """'auto' (or any other requirement) never unlocks the opt-in custom
+    theme: the model may only plan with it when the task names it."""
+    custom = replace(TWO_SLIDE_OUTLINE, theme="custom")
+    assert validate_outline_theme(custom, "custom") is None
+    for task_theme in ("auto", "default", "nextcloud"):
+        with pytest.raises(DeckError, match="only available when the user"):
+            validate_outline_theme(custom, task_theme)
+    with pytest.raises(DeckError, match="requires theme 'custom'"):
+        validate_outline_theme(TWO_SLIDE_OUTLINE, "custom")
+
+
+def test_outline_prompt_never_offers_the_custom_theme() -> None:
+    assert "- custom:" not in build_outline_prompt("a deck about bees")
 
 
 # --- Phase prompts ----------------------------------------------------------------
